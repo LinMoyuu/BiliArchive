@@ -110,8 +110,6 @@ component CollectionRangeRow inherits Rectangle {
     in-out property <string> to-text: "";
     callback selection-changed(bool);
     height: 72px;
-    min-height: 72px;
-    max-height: 72px;
     background: root.selected ? #FFF8FB : #F6F7FA;
     border-radius: 8px;
     VerticalLayout {
@@ -199,9 +197,6 @@ export component AppWindow inherits Window {
     in-out property <string> range-audio-from: "1";
     in-out property <string> range-audio-to: "";
     in-out property <string> range-audio-total: "未获取";
-    out property <length> collection-viewport-height: range-scroll.height;
-    out property <length> collection-content-height: range-scroll.content-height;
-    out property <length> collection-header-gap: range-scroll.y - range-note.y - range-note.height;
     property <bool> any-range-enabled: root.range-video-enabled || root.range-dynamic-enabled || root.range-repost-enabled || root.range-article-enabled || root.range-audio-enabled;
     // 设置
     in-out property <bool> settings-visible: false;

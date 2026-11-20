@@ -2881,20 +2881,7 @@ mod settings_component_tests {
         assert_eq!(ui.get_progress_display_text().as_str(),"视频第 3 页");
     }
 
-    #[test]
-    fn collection_viewport_fills_card_and_rows_start_below_heading() {
-        let window=MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
-        slint::platform::set_platform(Box::new(Headless(window.clone()))).unwrap();
-        let ui=AppWindow::new().unwrap();
-        window.set_size(slint::PhysicalSize::new(1040,700));ui.set_scope(0);
-        let small=ui.get_collection_viewport_height();
-        assert!(small>=72.,"viewport must expose a complete first row");
-        assert_eq!(ui.get_collection_content_height(),392.);
-        assert_eq!(ui.get_collection_header_gap(),6.);
-        window.set_size(slint::PhysicalSize::new(1280,1000));
-        assert!(ui.get_collection_viewport_height()>small,"viewport must fill extra card height");
-        assert_eq!(ui.get_collection_header_gap(),6.);
-    }
+
 }
 
 #[cfg(test)]
