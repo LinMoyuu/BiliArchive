@@ -2547,6 +2547,25 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     {
+        let weak=weak.clone();
+        ui.on_range_edited(move |ty| {if let Some(w)=weak.upgrade() {clamp_range_input(&w,ty as u32);}});
+    }
+    {
+        let weak=weak.clone();let tx=tx.clone();let shared=shared.clone();
+        ui.on_range_all(move |ty| {
+            if shared.busy.load(Ordering::SeqCst) {return;}
+            let Some(w)=weak.upgrade() else {return;};
+            if select_all_range(&w,ty as u32) {
+                if shared.account_uid.load(Ordering::SeqCst)>0 {
+                    set_foot(&weak,format!("正在获取{}总页数…",checkpoint::label(ty as u32)));
+                    let _=tx.send(Cmd::QueryTotals(vec![ty as u32]));
+                } else {
+                    set_foot(&weak,"已选择全部，请先登录以获取总页数".into());
+                }
+            }
+        });
+    }
+    {
         let tx = tx.clone();
         let shared = shared.clone();
         ui.on_range_enabled(move |ty, enabled| {
@@ -2882,6 +2901,42 @@ mod settings_component_tests {
     }
 
 
+
+    #[test]
+    fn all_button_and_upper_bound_correction_work_for_every_type() {
+        let window=MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+        slint::platform::set_platform(Box::new(Headless(window))).unwrap();
+        let ui=AppWindow::new().unwrap();
+        ui.set_range_video_limit("7".into());
+        ui.set_range_video_from("3".into());ui.set_range_video_to("999".into());
+        clamp_range_input(&ui,1);assert_eq!(ui.get_range_video_to().as_str(),"7");
+        assert!(!select_all_range(&ui,1));
+        assert_eq!(ui.get_range_video_from().as_str(),"1");assert_eq!(ui.get_range_video_to().as_str(),"7");
+        ui.set_range_dynamic_limit("7".into());
+        ui.set_range_dynamic_from("3".into());ui.set_range_dynamic_to("999".into());
+        clamp_range_input(&ui,11);assert_eq!(ui.get_range_dynamic_to().as_str(),"7");
+        assert!(!select_all_range(&ui,11));
+        assert_eq!(ui.get_range_dynamic_from().as_str(),"1");assert_eq!(ui.get_range_dynamic_to().as_str(),"7");
+        ui.set_range_repost_limit("7".into());
+        ui.set_range_repost_from("3".into());ui.set_range_repost_to("999".into());
+        clamp_range_input(&ui,17);assert_eq!(ui.get_range_repost_to().as_str(),"7");
+        assert!(!select_all_range(&ui,17));
+        assert_eq!(ui.get_range_repost_from().as_str(),"1");assert_eq!(ui.get_range_repost_to().as_str(),"7");
+        ui.set_range_article_limit("7".into());
+        ui.set_range_article_from("3".into());ui.set_range_article_to("999".into());
+        clamp_range_input(&ui,12);assert_eq!(ui.get_range_article_to().as_str(),"7");
+        assert!(!select_all_range(&ui,12));
+        assert_eq!(ui.get_range_article_from().as_str(),"1");assert_eq!(ui.get_range_article_to().as_str(),"7");
+        ui.set_range_audio_limit("7".into());
+        ui.set_range_audio_from("3".into());ui.set_range_audio_to("999".into());
+        clamp_range_input(&ui,14);assert_eq!(ui.get_range_audio_to().as_str(),"7");
+        assert!(!select_all_range(&ui,14));
+        assert_eq!(ui.get_range_audio_from().as_str(),"1");assert_eq!(ui.get_range_audio_to().as_str(),"7");
+        ui.set_range_audio_limit("".into());assert!(select_all_range(&ui,14));
+        assert!(ui.get_range_audio_all_pending());
+        ui.set_range_audio_limit("4".into());assert!(!select_all_range(&ui,14));
+        assert_eq!(ui.get_range_audio_to().as_str(),"4");
+    }
 }
 
 #[cfg(test)]
@@ -3097,18 +3152,86 @@ fn ranges_from_ui(w: &AppWindow) -> Result<collection::Ranges> {
     );
     Ok(ranges)
 }
-fn set_type_total(ui: &Weak<AppWindow>, ty: u32, total: Option<u64>) {
-    let text = total
-        .map(|n| format!("共 {} 页 / {} 条", n.div_ceil(collection::PAGE_SIZE), n))
-        .unwrap_or_else(|| "未获取".into());
-    emit(ui, move |w| match ty {
-        1 => w.set_range_video_total(text.into()),
-        11 => w.set_range_dynamic_total(text.into()),
-        17 => w.set_range_repost_total(text.into()),
-        12 => w.set_range_article_total(text.into()),
-        14 => w.set_range_audio_total(text.into()),
-        _ => (),
+fn set_type_total(ui:&Weak<AppWindow>,ty:u32,total:Option<u64>) {
+    let pages=total.map(|n|n.div_ceil(collection::PAGE_SIZE));
+    let text=total.map(|n|format!("共 {} 页 / {} 条",n.div_ceil(collection::PAGE_SIZE),n)).unwrap_or_else(||"未获取".into());
+    let limit=pages.map(|n|n.to_string()).unwrap_or_default();
+    emit(ui,move |w| {
+        match ty {
+            1=>{
+                let pending=w.get_range_video_all_pending();
+                w.set_range_video_total(text.into());w.set_range_video_limit(limit.into());
+                if pending && pages.is_some() {select_all_range(w,1);}
+                w.set_range_video_all_pending(false);
+            }
+            11=>{
+                let pending=w.get_range_dynamic_all_pending();
+                w.set_range_dynamic_total(text.into());w.set_range_dynamic_limit(limit.into());
+                if pending && pages.is_some() {select_all_range(w,11);}
+                w.set_range_dynamic_all_pending(false);
+            }
+            17=>{
+                let pending=w.get_range_repost_all_pending();
+                w.set_range_repost_total(text.into());w.set_range_repost_limit(limit.into());
+                if pending && pages.is_some() {select_all_range(w,17);}
+                w.set_range_repost_all_pending(false);
+            }
+            12=>{
+                let pending=w.get_range_article_all_pending();
+                w.set_range_article_total(text.into());w.set_range_article_limit(limit.into());
+                if pending && pages.is_some() {select_all_range(w,12);}
+                w.set_range_article_all_pending(false);
+            }
+            14=>{
+                let pending=w.get_range_audio_all_pending();
+                w.set_range_audio_total(text.into());w.set_range_audio_limit(limit.into());
+                if pending && pages.is_some() {select_all_range(w,14);}
+                w.set_range_audio_all_pending(false);
+            }
+            _=>return,
+        }
+        clamp_range_input(w,ty);
     });
+}
+
+fn range_input(w:&AppWindow,ty:u32)->Option<(String,String,Option<u64>)> {
+    match ty {
+        1=>Some((w.get_range_video_from().to_string(),w.get_range_video_to().to_string(),w.get_range_video_limit().parse().ok())),
+        11=>Some((w.get_range_dynamic_from().to_string(),w.get_range_dynamic_to().to_string(),w.get_range_dynamic_limit().parse().ok())),
+        17=>Some((w.get_range_repost_from().to_string(),w.get_range_repost_to().to_string(),w.get_range_repost_limit().parse().ok())),
+        12=>Some((w.get_range_article_from().to_string(),w.get_range_article_to().to_string(),w.get_range_article_limit().parse().ok())),
+        14=>Some((w.get_range_audio_from().to_string(),w.get_range_audio_to().to_string(),w.get_range_audio_limit().parse().ok())),
+        _=>None,
+    }
+}
+fn set_range_bounds(w:&AppWindow,ty:u32,from:String,to:String) {
+    match ty {
+        1=>{w.set_range_video_from(from.into());w.set_range_video_to(to.into());},
+        11=>{w.set_range_dynamic_from(from.into());w.set_range_dynamic_to(to.into());},
+        17=>{w.set_range_repost_from(from.into());w.set_range_repost_to(to.into());},
+        12=>{w.set_range_article_from(from.into());w.set_range_article_to(to.into());},
+        14=>{w.set_range_audio_from(from.into());w.set_range_audio_to(to.into());},
+        _=>(),
+    }
+}
+fn clamp_range_input(w:&AppWindow,ty:u32) {
+    if let Some((from,to,limit))=range_input(w,ty) {
+        let (from,to)=collection::corrected_bounds(&from,&to,limit);set_range_bounds(w,ty,from,to);
+    }
+}
+fn select_all_range(w:&AppWindow,ty:u32)->bool {
+    let Some((_,_,limit))=range_input(w,ty) else {return false;};
+    set_range_bounds(w,ty,"1".into(),limit.filter(|n|*n>0).map(|n|n.to_string()).unwrap_or_default());
+    let pending=limit.is_none();
+    match ty {
+        1=>w.set_range_video_all_pending(pending),
+        11=>w.set_range_dynamic_all_pending(pending),
+        17=>w.set_range_repost_all_pending(pending),
+        12=>w.set_range_article_all_pending(pending),
+        14=>w.set_range_audio_all_pending(pending),
+        _=>(),
+    }
+    pending
 }
 
 fn merge_online_metadata(shared: &Arc<Shared>, video: &Video) {

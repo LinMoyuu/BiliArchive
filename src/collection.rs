@@ -134,3 +134,37 @@ mod tests {
         assert!(validate(&r, false).is_ok());
     }
 }
+
+/// Correct numeric input against the current type's known page limit.
+pub fn corrected_bounds(from: &str, to: &str, limit: Option<u64>) -> (String,String) {
+    if limit==Some(0) {return ("1".into(),String::new());}
+    let from=from.trim();let to=to.trim();
+    let start=from.parse::<u64>().ok().map(|n|n.max(1));
+    let start=start.map(|n|limit.map(|max|n.min(max)).unwrap_or(n));
+    let next_from=if from.is_empty(){String::new()}else{start.map(|n|n.to_string()).unwrap_or_else(||from.to_string())};
+    let next_to=if to.is_empty(){String::new()}else{
+        let end=to.parse::<u64>().ok().or_else(||{
+            if limit.is_some() && to.bytes().all(|c|c.is_ascii_digit()){Some(u64::MAX)}else{None}
+        });
+        end.map(|n|{
+            let n=limit.map(|max|n.min(max)).unwrap_or(n);
+            n.max(start.unwrap_or(1)).to_string()
+        }).unwrap_or_else(||to.to_string())
+    };
+    (next_from,next_to)
+}
+
+#[cfg(test)]
+mod corrected_bounds_tests {
+    use super::*;
+    #[test]
+    fn applies_limits_to_each_type_without_limiting_unknown_totals() {
+        assert_eq!(corrected_bounds("1","999",Some(7)),("1".into(),"7".into()));
+        assert_eq!(corrected_bounds("99","999",Some(7)),("7".into(),"7".into()));
+        assert_eq!(corrected_bounds("3","2",Some(7)),("3".into(),"3".into()));
+        assert_eq!(corrected_bounds("1","999",None),("1".into(),"999".into()));
+        assert_eq!(corrected_bounds("1","",Some(7)),("1".into(),"".into()));
+        assert_eq!(corrected_bounds("99","999",Some(0)),("1".into(),"".into()));
+        assert_eq!(corrected_bounds("1","9999999999999999999999999",Some(7)),("1".into(),"7".into()));
+    }
+}
