@@ -220,6 +220,7 @@ struct Shared {
     /// 停止意图：true=暂停（保留断点，下次「继续采集」从这里接上）；false=结束（清断点）
     pause_requested: AtomicBool,
     busy: AtomicBool,
+    loading_local: AtomicBool,
     /// 扫码登录的「代次」：每次开新码 +1，旧线程发现代次变了就自行退出
     qr_gen: AtomicUsize,
     cfg: Mutex<Cfg>,
@@ -237,6 +238,7 @@ impl Shared {
             cancel: AtomicBool::new(false),
             pause_requested: AtomicBool::new(false),
             busy: AtomicBool::new(false),
+            loading_local: AtomicBool::new(false),
             qr_gen: AtomicUsize::new(0),
             cfg: Mutex::new(cfg),
             account_uid: std::sync::atomic::AtomicU64::new(0),
@@ -755,12 +757,15 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                 }
 
                 let uid = shared.account_uid.load(Ordering::SeqCst);
-                load_history(&shared, &ui, uid, &expected_cookie);
-                if shared.cfg.lock().unwrap().sessdata != expected_cookie {
-                    set_busy(&shared, &ui, false);
-                    continue;
+                {
+                    let _local_read=LocalReadGuard::begin(&shared,&ui);
+                    load_history(&shared, &ui, uid, &expected_cookie);
+                    if shared.cfg.lock().unwrap().sessdata != expected_cookie {
+                        set_busy(&shared, &ui, false);
+                        continue;
+                    }
+                    restore_checkpoint(&shared, &ui, uid);
                 }
-                restore_checkpoint(&shared, &ui, uid);
 
                 let mut all: Vec<Video> = Vec::new();
                 let mut pn = 1u64;
@@ -2227,10 +2232,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let shared = shared.clone();
         let weak = weak.clone();
         ui.on_pause(move || {
-            // 暂停：停在当前批，保留断点，下次「继续采集」从这里接上
-            shared.pause_requested.store(true, Ordering::SeqCst);
-            shared.cancel.store(true, Ordering::SeqCst);
-            emit(&weak, |w| w.set_progress_text("正在暂停，保留进度…".into()));
+            pause_collection(&shared,&weak);
         });
     }
 
@@ -2238,11 +2240,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let shared = shared.clone();
         let weak = weak.clone();
         ui.on_stop(move || {
-            // 结束：停在当前批并清除断点，下次「开始采集」从头来
-            shared.pause_requested.store(false, Ordering::SeqCst);
-            shared.cancel.store(true, Ordering::SeqCst);
-            clear_checkpoint(&shared, &weak);
-            emit(&weak, |w| w.set_progress_text("正在结束…".into()));
+            stop_collection(&shared,&weak);
         });
     }
 
@@ -2956,6 +2954,25 @@ mod settings_component_tests {
             fill_known_end(&ui,ty,Some(0));assert!(range_input(&ui,ty).unwrap().1.is_empty());
         }
     }
+
+    #[test]
+    fn local_reading_blocks_pause_stop_and_restores_control_on_exit() {
+        let window=MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+        slint::platform::set_platform(Box::new(Headless(window))).unwrap();
+        let ui=AppWindow::new().unwrap();let weak=ui.as_weak();
+        let shared=Arc::new(Shared::new(Cfg::default()));
+        *shared.checkpoint.lock().unwrap()=Some(checkpoint::Task::new(123,collection::defaults(),true,vec![]));
+        {
+            let _guard=LocalReadGuard::begin(&shared,&weak);
+            assert!(shared.loading_local.load(Ordering::SeqCst));
+            pause_collection(&shared,&weak);stop_collection(&shared,&weak);
+            assert!(!shared.pause_requested.load(Ordering::SeqCst));assert!(!shared.cancel.load(Ordering::SeqCst));
+            assert!(shared.checkpoint.lock().unwrap().is_some(),"reading must not delete collection checkpoints");
+        }
+        assert!(!shared.loading_local.load(Ordering::SeqCst));
+        pause_collection(&shared,&weak);
+        assert!(shared.pause_requested.load(Ordering::SeqCst));assert!(shared.cancel.load(Ordering::SeqCst));
+    }
 }
 
 #[cfg(test)]
@@ -3329,4 +3346,37 @@ mod historical_data_tests {
         let cfg = Cfg::default();
         assert_eq!((cfg.interval_ms, cfg.interval_max_ms), (1800, 2400));
     }
+}
+
+
+struct LocalReadGuard {
+    shared: Arc<Shared>,
+    ui: Weak<AppWindow>,
+}
+impl LocalReadGuard {
+    fn begin(shared:&Arc<Shared>,ui:&Weak<AppWindow>)->Self {
+        shared.loading_local.store(true,Ordering::SeqCst);
+        emit(ui,|w|{w.set_loading_local(true);w.set_progress_text("正在读取本地稿件…".into());});
+        Self{shared:shared.clone(),ui:ui.clone()}
+    }
+}
+impl Drop for LocalReadGuard {
+    fn drop(&mut self) {
+        self.shared.loading_local.store(false,Ordering::SeqCst);
+        emit(&self.ui,|w|w.set_loading_local(false));
+    }
+}
+
+fn pause_collection(shared:&Arc<Shared>,ui:&Weak<AppWindow>) {
+    if shared.loading_local.load(Ordering::SeqCst) {return;}
+    shared.pause_requested.store(true,Ordering::SeqCst);
+    shared.cancel.store(true,Ordering::SeqCst);
+    emit(ui,|w|w.set_progress_text("正在暂停，保留进度…".into()));
+}
+fn stop_collection(shared:&Arc<Shared>,ui:&Weak<AppWindow>) {
+    if shared.loading_local.load(Ordering::SeqCst) {return;}
+    shared.pause_requested.store(false,Ordering::SeqCst);
+    shared.cancel.store(true,Ordering::SeqCst);
+    clear_checkpoint(shared,ui);
+    emit(ui,|w|w.set_progress_text("正在结束…".into()));
 }

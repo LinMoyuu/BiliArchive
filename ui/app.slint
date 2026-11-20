@@ -1,4 +1,4 @@
-import { ScrollView, ListView } from "std-widgets.slint";
+import { ScrollView, ListView, TextEdit } from "std-widgets.slint";
 
 export global Theme {
     out property <color> bg: #F2F3F8;
@@ -165,6 +165,7 @@ export component AppWindow inherits Window {
     in-out property <string> status-text: "未连接";
     in-out property <bool> status-ok: false;
     in-out property <bool> busy: false;
+    in-out property <bool> loading-local: false;
     // 断点续传：是否有未完成的进度、以及提示文案
     in-out property <bool> has-resume: false;
     in-out property <string> resume-text: "";
@@ -801,12 +802,14 @@ export component AppWindow inherits Window {
                             spacing: 8px;
                             if root.busy : Btn {
                                 text: "暂停";
+                                enabled: !root.loading-local;
                                 primary: false;
                                 horizontal-stretch: 1;
                                 clicked => { root.pause(); }
                             }
                             if root.busy : Btn {
                                 text: "结束";
+                                enabled: !root.loading-local;
                                 primary: true;
                                 width: 72px;
                                 clicked => { root.stop(); }
@@ -932,34 +935,13 @@ export component AppWindow inherits Window {
                             vertical-stretch: 1;
                             clip: true;
 
-                            VerticalLayout {
-                                alignment: center;
-                                spacing: 6px;
-                                visible: !root.has-data;
-                                HorizontalLayout {
-                                    alignment: center;
-                                    Rectangle {
-                                        width: 42px;
-                                        height: 42px;
-                                        border-radius: 21px;
-                                        background: #F2F4FA;
-                                        Text { text: "{ }"; color: #B7BDCC; font-size: 14px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
-                                    }
-                                }
-                                Text { text: "采集完成后，这里显示导出的数据预览"; color: #9AA1B2; font-size: 11px; horizontal-alignment: center; }
-                            }
-
-                            preview-scroll := ScrollView {
-                                visible: root.has-data;
+                            preview-editor := TextEdit {
                                 width: parent.width; height: parent.height;
-                                content-width: self.visible-width;
-                                content-height: max(preview-body.preferred-height + 16px, self.visible-height);
-                                preview-body := Text {
-                                    x: 10px; y: 8px;
-                                    width: max(0px, preview-scroll.visible-width - 20px);
-                                    height: self.preferred-height;
-                                    text: root.preview-text; color: #4A5063; font-size: 10.5px; wrap: word-wrap;
-                                }
+                                text <=> root.preview-text;
+                                read-only: false;
+                                font-size: 10.5px;
+                                wrap: word-wrap;
+                                placeholder-text: "采集或导入后显示 JSON 预览，可框选、复制和粘贴";
                             }
                         }
                     }
