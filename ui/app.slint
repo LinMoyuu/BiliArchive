@@ -109,7 +109,9 @@ component CollectionRangeRow inherits Rectangle {
     in-out property <string> from-text: "1";
     in-out property <string> to-text: "";
     callback selection-changed(bool);
-    height: 68px;
+    height: 72px;
+    min-height: 72px;
+    max-height: 72px;
     background: root.selected ? #FFF8FB : #F6F7FA;
     border-radius: 8px;
     VerticalLayout {
@@ -197,6 +199,9 @@ export component AppWindow inherits Window {
     in-out property <string> range-audio-from: "1";
     in-out property <string> range-audio-to: "";
     in-out property <string> range-audio-total: "未获取";
+    out property <length> collection-viewport-height: range-scroll.height;
+    out property <length> collection-content-height: range-scroll.content-height;
+    out property <length> collection-header-gap: range-scroll.y - range-note.y - range-note.height;
     property <bool> any-range-enabled: root.range-video-enabled || root.range-dynamic-enabled || root.range-repost-enabled || root.range-article-enabled || root.range-audio-enabled;
     // 设置
     in-out property <bool> settings-visible: false;
@@ -518,65 +523,71 @@ export component AppWindow inherits Window {
                         }
 
                         if root.scope == 0 : Rectangle {
-                            vertical-stretch: 1; background: #FBFCFE; border-radius: 10px;
+                            vertical-stretch: 1; min-height: 160px;
+                            background: #FBFCFE; border-radius: 10px;
                             border-width: 1px; border-color: #EDEFF5; clip: true;
-                            VerticalLayout {
-                                alignment: LayoutAlignment.start;
-                                padding: 8px; spacing: 6px;
-                                Text { vertical-stretch: 0; text: "各类型独立页码 · 每页 10 条 · 结束页留空到末页"; color: Theme.faint; font-size: 9px; wrap: word-wrap; }
-                                ScrollView {
-                                    vertical-stretch: 1; content-width: self.visible-width;
-                                    content-height: max(range-list.preferred-height, self.visible-height);
-                                    range-list := VerticalLayout {
-                                        alignment: LayoutAlignment.start;
-                                        height: self.preferred-height;
-                                        spacing: 6px; padding-right: 4px;
-                                    CollectionRangeRow {
-                                        label: "视频"; busy: root.busy;
-                                        selected <=> root.range-video-enabled;
-                                        from-text <=> root.range-video-from;
-                                        to-text <=> root.range-video-to;
-                                        total-text: root.range-video-total;
-                                        selection-changed(value) => { root.range-enabled(1, value); }
-                                    }
-                                    CollectionRangeRow {
-                                        label: "动态"; busy: root.busy;
-                                        selected <=> root.range-dynamic-enabled;
-                                        from-text <=> root.range-dynamic-from;
-                                        to-text <=> root.range-dynamic-to;
-                                        total-text: root.range-dynamic-total;
-                                        selection-changed(value) => { root.range-enabled(11, value); }
-                                    }
-                                    CollectionRangeRow {
-                                        label: "转发动态"; busy: root.busy;
-                                        selected <=> root.range-repost-enabled;
-                                        from-text <=> root.range-repost-from;
-                                        to-text <=> root.range-repost-to;
-                                        total-text: root.range-repost-total;
-                                        selection-changed(value) => { root.range-enabled(17, value); }
-                                    }
-                                    CollectionRangeRow {
-                                        label: "专栏"; busy: root.busy;
-                                        selected <=> root.range-article-enabled;
-                                        from-text <=> root.range-article-from;
-                                        to-text <=> root.range-article-to;
-                                        total-text: root.range-article-total;
-                                        selection-changed(value) => { root.range-enabled(12, value); }
-                                    }
-                                    CollectionRangeRow {
-                                        label: "音频"; busy: root.busy;
-                                        selected <=> root.range-audio-enabled;
-                                        from-text <=> root.range-audio-from;
-                                        to-text <=> root.range-audio-to;
-                                        total-text: root.range-audio-total;
-                                        selection-changed(value) => { root.range-enabled(14, value); }
-                                    }
-                                    }
+                            range-note := Text {
+                                x: 8px; y: 8px; width: parent.width - 16px; height: self.preferred-height;
+                                text: "各类型独立页码 · 每页 10 条 · 结束页留空到末页";
+                                color: Theme.faint; font-size: 9px; wrap: word-wrap;
+                            }
+                            range-scroll := ScrollView {
+                                x: 8px; y: range-note.y + range-note.height + 6px;
+                                width: parent.width - 16px;
+                                height: max(0px, parent.height - self.y - 8px - (root.has-resume ? 40px : 0px));
+                                content-width: self.visible-width;
+                                content-height: 392px;
+                                CollectionRangeRow {
+                                    x: 0px; y: 0px; width: range-scroll.visible-width - 4px;
+                                    label: "视频"; busy: root.busy;
+                                    selected <=> root.range-video-enabled;
+                                    from-text <=> root.range-video-from;
+                                    to-text <=> root.range-video-to;
+                                    total-text: root.range-video-total;
+                                    selection-changed(value) => { root.range-enabled(1, value); }
                                 }
-                                if root.has-resume : HorizontalLayout {
-                                    Text { text: root.resume-text; color: Theme.accent-dark; font-size: 9px; wrap: word-wrap; horizontal-stretch: 1; }
-                                    Btn { text: "清除"; width: 44px; small: true; enabled: !root.busy; clicked => { root.clear-resume(); } }
+                                CollectionRangeRow {
+                                    x: 0px; y: 80px; width: range-scroll.visible-width - 4px;
+                                    label: "动态"; busy: root.busy;
+                                    selected <=> root.range-dynamic-enabled;
+                                    from-text <=> root.range-dynamic-from;
+                                    to-text <=> root.range-dynamic-to;
+                                    total-text: root.range-dynamic-total;
+                                    selection-changed(value) => { root.range-enabled(11, value); }
                                 }
+                                CollectionRangeRow {
+                                    x: 0px; y: 160px; width: range-scroll.visible-width - 4px;
+                                    label: "转发动态"; busy: root.busy;
+                                    selected <=> root.range-repost-enabled;
+                                    from-text <=> root.range-repost-from;
+                                    to-text <=> root.range-repost-to;
+                                    total-text: root.range-repost-total;
+                                    selection-changed(value) => { root.range-enabled(17, value); }
+                                }
+                                CollectionRangeRow {
+                                    x: 0px; y: 240px; width: range-scroll.visible-width - 4px;
+                                    label: "专栏"; busy: root.busy;
+                                    selected <=> root.range-article-enabled;
+                                    from-text <=> root.range-article-from;
+                                    to-text <=> root.range-article-to;
+                                    total-text: root.range-article-total;
+                                    selection-changed(value) => { root.range-enabled(12, value); }
+                                }
+                                CollectionRangeRow {
+                                    x: 0px; y: 320px; width: range-scroll.visible-width - 4px;
+                                    label: "音频"; busy: root.busy;
+                                    selected <=> root.range-audio-enabled;
+                                    from-text <=> root.range-audio-from;
+                                    to-text <=> root.range-audio-to;
+                                    total-text: root.range-audio-total;
+                                    selection-changed(value) => { root.range-enabled(14, value); }
+                                }
+                            }
+                            if root.has-resume : HorizontalLayout {
+                                x: 8px; y: parent.height - 40px; width: parent.width - 16px; height: 32px;
+                                spacing: 6px;
+                                Text { text: root.resume-text; color: Theme.accent-dark; font-size: 9px; wrap: word-wrap; horizontal-stretch: 1; }
+                                Btn { text: "清除"; width: 44px; small: true; enabled: !root.busy; clicked => { root.clear-resume(); } }
                             }
                         }
 
