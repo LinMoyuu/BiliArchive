@@ -2937,6 +2937,25 @@ mod settings_component_tests {
         ui.set_range_audio_limit("4".into());assert!(!select_all_range(&ui,14));
         assert_eq!(ui.get_range_audio_to().as_str(),"4");
     }
+
+    #[test]
+    fn known_last_page_autofills_all_five_types_and_preserves_manual_ranges() {
+        let window=MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+        slint::platform::set_platform(Box::new(Headless(window))).unwrap();
+        let ui=AppWindow::new().unwrap();
+        for ty in collection::TYPES {
+            set_range_bounds(&ui,ty,"3".into(),String::new());
+            fill_known_end(&ui,ty,Some(7));
+            let (from,to,_)=range_input(&ui,ty).unwrap();
+            assert_eq!((from,to),("3".into(),"7".into()));
+            set_range_bounds(&ui,ty,"2".into(),"4".into());
+            fill_known_end(&ui,ty,Some(7));
+            assert_eq!(range_input(&ui,ty).unwrap().1,"4");
+            set_range_bounds(&ui,ty,"1".into(),String::new());
+            fill_known_end(&ui,ty,None);assert!(range_input(&ui,ty).unwrap().1.is_empty());
+            fill_known_end(&ui,ty,Some(0));assert!(range_input(&ui,ty).unwrap().1.is_empty());
+        }
+    }
 }
 
 #[cfg(test)]
@@ -3190,8 +3209,16 @@ fn set_type_total(ui:&Weak<AppWindow>,ty:u32,total:Option<u64>) {
             }
             _=>return,
         }
+        fill_known_end(w,ty,pages);
         clamp_range_input(w,ty);
     });
+}
+
+fn fill_known_end(w:&AppWindow,ty:u32,pages:Option<u64>) {
+    let Some(pages)=pages.filter(|n|*n>0) else {return;};
+    if let Some((from,to,_))=range_input(w,ty) {
+        if to.trim().is_empty() {set_range_bounds(w,ty,from,pages.to_string());}
+    }
 }
 
 fn range_input(w:&AppWindow,ty:u32)->Option<(String,String,Option<u64>)> {
