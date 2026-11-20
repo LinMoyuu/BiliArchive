@@ -1,0 +1,1464 @@
+import { ScrollView, ListView } from "std-widgets.slint";
+
+export global Theme {
+    out property <color> bg: #F2F3F8;
+    out property <color> card: #FFFFFF;
+    out property <color> border: #E5E8F0;
+    out property <color> text: #191C25;
+    out property <color> muted: #757C8F;
+    out property <color> faint: #A2A8B7;
+    out property <color> accent: #FB7299;
+    out property <color> accent-dark: #E85C86;
+    out property <color> accent-soft: #FFF0F5;
+    out property <color> blue: #00A1D6;
+    out property <color> ok: #17A673;
+    out property <color> warn: #E2663B;
+    out property <color> field: #F6F7FB;
+}
+
+export struct VideoRow {
+    index: int,
+    bvid: string,
+    title: string,
+    meta: string,
+    checked: bool,
+}
+
+component CheckBox inherits Rectangle {
+    in-out property <bool> checked: false;
+    width: 18px;
+    height: 18px;
+    border-radius: 5px;
+    border-width: checked ? 0px : 1.5px;
+    border-color: #CFD4E0;
+    background: checked ? Theme.accent : transparent;
+
+    Text {
+        text: "✓";
+        color: white;
+        font-size: 12px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        visible: root.checked;
+    }
+}
+
+component Btn inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary: false;
+    in property <bool> enabled: true;
+    in property <bool> small: false;
+    callback clicked();
+
+    height: small ? 30px : 36px;
+    border-radius: 9px;
+    border-width: primary ? 0px : 1px;
+    border-color: #E1E5EE;
+    background: !enabled ? #EEF0F5 : (primary ? (t.has-hover ? #FF86A9 : Theme.accent) : (t.has-hover ? #F4F6FB : #FFFFFF));
+    animate background { duration: 90ms; }
+
+    t := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { if (root.enabled) { root.clicked(); } }
+    }
+
+    Text {
+        text: root.text;
+        color: !enabled ? #AEB4C2 : (primary ? white : #2B303D);
+        font-size: small ? 11.5px : 12.5px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+component Toggle inherits Rectangle {
+    in property <bool> enabled: true;
+    in-out property <bool> checked: false;
+    callback toggled();
+    width: 38px;
+    height: 21px;
+    border-radius: 11px;
+    background: checked ? Theme.accent : #D9DDE7;
+    animate background { duration: 120ms; }
+
+    Rectangle {
+        width: 17px;
+        height: 17px;
+        border-radius: 9px;
+        y: 2px;
+        x: root.checked ? 19px : 2px;
+        background: white;
+        animate x { duration: 120ms; }
+    }
+
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            if(root.enabled) { root.checked = !root.checked; root.toggled(); }
+        }
+    }
+}
+
+component CollectionRangeRow inherits Rectangle {
+    in property <string> label;
+    in property <string> total-text: "未获取";
+    in property <bool> busy: false;
+    in-out property <bool> selected: true;
+    in-out property <string> from-text: "1";
+    in-out property <string> to-text: "";
+    callback selection-changed(bool);
+    height: 68px;
+    background: root.selected ? #FFF8FB : #F6F7FA;
+    border-radius: 8px;
+    VerticalLayout {
+        padding: 6px; spacing: 5px;
+        HorizontalLayout {
+            spacing: 8px;
+            Toggle { checked <=> root.selected; enabled: !root.busy; toggled => { root.selection-changed(root.selected); } }
+            Text { text: root.label; color: root.selected ? Theme.text : Theme.faint; font-size: 10.5px; font-weight: 600; vertical-alignment: center; }
+            Text { text: root.total-text; color: Theme.faint; font-size: 9px; horizontal-stretch: 1; horizontal-alignment: right; vertical-alignment: center; }
+        }
+        HorizontalLayout {
+            spacing: 5px;
+            Text { text: "起始页"; font-size: 9px; color: Theme.muted; vertical-alignment: center; }
+            Rectangle {
+                width: 43px; height: 24px; background: white; border-radius: 5px; border-width: 1px; border-color: Theme.border;
+                TextInput { x: 2px; width: parent.width - 4px; height: parent.height; text <=> root.from-text; enabled: root.selected && !root.busy; input-type: number; single-line: true; font-size: 10px; horizontal-alignment: center; vertical-alignment: center; }
+            }
+            Text { text: "结束页"; font-size: 9px; color: Theme.muted; vertical-alignment: center; }
+            Rectangle {
+                width: 43px; height: 24px; background: white; border-radius: 5px; border-width: 1px; border-color: Theme.border;
+                Text { text: "末页"; visible: root.to-text == ""; color: Theme.faint; font-size: 9px; horizontal-alignment: center; vertical-alignment: center; }
+                TextInput { x: 2px; width: parent.width - 4px; height: parent.height; text <=> root.to-text; enabled: root.selected && !root.busy; input-type: number; single-line: true; font-size: 10px; horizontal-alignment: center; vertical-alignment: center; }
+            }
+            Btn { text: "全部"; width: 44px; small: true; enabled: root.selected && !root.busy; clicked => { root.from-text = "1"; root.to-text = ""; } }
+            Rectangle { horizontal-stretch: 1; background: transparent; }
+        }
+    }
+}
+
+component SectionTitle inherits Text {
+    in property <string> label;
+    text: label;
+    color: Theme.text;
+    font-size: 12.5px;
+    font-weight: 700;
+    vertical-alignment: center;
+}
+
+export component AppWindow inherits Window {
+    title: "评论聚合台 · BiliCommentHub";
+    preferred-width: 1200px;
+    preferred-height: 792px;
+    min-width: 1040px;
+    min-height: 700px;
+    background: Theme.bg;
+    default-font-family: "Microsoft YaHei UI";
+    default-font-size: 12px;
+
+    // ---- 状态 ----
+    in-out property <string> sessdata: "";
+    in-out property <string> status-text: "未连接";
+    in-out property <bool> status-ok: false;
+    in-out property <bool> busy: false;
+    // 断点续传：是否有未完成的进度、以及提示文案
+    in-out property <bool> has-resume: false;
+    in-out property <string> resume-text: "";
+    in-out property <float> progress: 0.0;
+    in-out property <string> progress-text: "";
+    in-out property <string> account-text: "";
+    in-out property <[VideoRow]> videos: [];
+    in-out property <int> selected-count: 0;
+    in-out property <string> new-video-text: "";
+    in-out property <int> scope: 0;
+    in-out property <bool> include-replies: true;
+    in-out property <bool> range-video-enabled: true;
+    in-out property <string> range-video-from: "1";
+    in-out property <string> range-video-to: "";
+    in-out property <string> range-video-total: "未获取";
+    in-out property <bool> range-dynamic-enabled: true;
+    in-out property <string> range-dynamic-from: "1";
+    in-out property <string> range-dynamic-to: "";
+    in-out property <string> range-dynamic-total: "未获取";
+    in-out property <bool> range-repost-enabled: true;
+    in-out property <string> range-repost-from: "1";
+    in-out property <string> range-repost-to: "";
+    in-out property <string> range-repost-total: "未获取";
+    in-out property <bool> range-article-enabled: true;
+    in-out property <string> range-article-from: "1";
+    in-out property <string> range-article-to: "";
+    in-out property <string> range-article-total: "未获取";
+    in-out property <bool> range-audio-enabled: true;
+    in-out property <string> range-audio-from: "1";
+    in-out property <string> range-audio-to: "";
+    in-out property <string> range-audio-total: "未获取";
+    property <bool> any-range-enabled: root.range-video-enabled || root.range-dynamic-enabled || root.range-repost-enabled || root.range-article-enabled || root.range-audio-enabled;
+    // 设置
+    in-out property <bool> settings-visible: false;
+    in-out property <bool> alert-visible: false;
+    in-out property <string> alert-text: "";
+    in-out property <string> web-address: "";
+    in-out property <bool> web-running: false;
+    in-out property <string> web-port-text: "8686";
+    in-out property <string> export-dir-text: "";
+    in-out property <bool> auto-export: false;
+    // 所有翻页拉取共用的间隔区间（毫秒），每次翻页在区间内随机
+    in-out property <string> page-delay-text: "1800";
+    in-out property <string> page-delay-max-text: "2400";
+    in-out property <bool> verify-visible: false;
+    in-out property <bool> verify-background: false;
+    in-out property <int> verify-secs: 0;
+    in-out property <string> verify-text: "";
+    // 扫码登录
+    in-out property <bool> qr-visible: false;
+    in-out property <image> qr-image;
+    in-out property <bool> qr-empty: true;
+    in-out property <string> qr-status: "";
+    in-out property <int> stat-videos: 0;
+    in-out property <int> stat-dynamics: 0;
+    in-out property <int> stat-comments: 0;
+    in-out property <int> stat-replies: 0;
+    in-out property <string> stat-likes: "0";
+    in-out property <string> preview-text: "";
+    in-out property <string> log-text: "";
+    in-out property <bool> has-data: false;
+    in-out property <string> foot-text: "就绪";
+
+    callback read-archives(string);
+    callback add-video(string);
+    callback toggle-video(int);
+    callback toggle-all();
+    callback start();
+    callback pause();
+    callback stop();
+    callback clear-resume();
+    callback export-clicked();
+    callback open-web();
+    callback import-clicked();
+    callback open-dir();
+    callback clear-all();
+    callback verify-open();
+    callback verify-dismiss();
+    callback qr-login();
+    callback qr-cancel();
+    callback range-enabled(int, bool);
+    callback split-import-clicked();
+    callback settings-open();
+    callback settings-close();
+    callback settings-apply();
+    callback settings-pick-dir();
+    callback settings-open-dir();
+    callback settings-open-web();
+    callback settings-toggle-web();
+
+    // ================= 顶栏 =================
+    VerticalLayout {
+        Rectangle {
+            height: 70px;
+            background: Theme.card;
+            drop-shadow-blur: 10px;
+            drop-shadow-color: #0F172A0A;
+            drop-shadow-offset-y: 1px;
+
+            // 外层只管垂直居中（主轴 = 垂直），内层负责水平分布：LOGO 贴左、按钮贴右
+            VerticalLayout {
+                alignment: center;
+                HorizontalLayout {
+                    padding-left: 20px;
+                    padding-right: 20px;
+                    spacing: 12px;
+
+                Rectangle {
+                    width: 38px;
+                    height: 38px;
+                    border-radius: 11px;
+                    background: @linear-gradient(135deg, #FB7299 0%, #FF9BB6 55%, #00A1D6 140%);
+                    Text {
+                        text: "评";
+                        color: white;
+                        font-size: 18px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    drop-shadow-blur: 10px;
+                    drop-shadow-color: #FB729940;
+                    drop-shadow-offset-y: 3px;
+                }
+
+                VerticalLayout {
+                    spacing: 1px;
+                    alignment: center;
+                    Text { text: "评论聚合台"; color: Theme.text; font-size: 16px; font-weight: 700; vertical-alignment: center; }
+                    Text { text: "创作中心评论 · 一次采集，整合为 JSON"; color: Theme.faint; font-size: 10.5px; vertical-alignment: center; }
+                }
+
+                Rectangle { horizontal-stretch: 1; background: transparent; }
+
+                // 进度
+                VerticalLayout {
+                    visible: root.busy;
+                    width: root.busy ? 180px : 0px;
+                    spacing: 4px;
+                    alignment: center;
+                    Rectangle {
+                        height: 5px;
+                        border-radius: 3px;
+                        background: #EDEFF5;
+                        Rectangle {
+                            height: 100%;
+                            width: max(6px, parent.width * root.progress);
+                            border-radius: 3px;
+                            background: @linear-gradient(90deg, #FB7299 0%, #FF9BB6 100%);
+                            animate width { duration: 160ms; }
+                        }
+                    }
+                    Text { text: root.progress-text; color: Theme.muted; font-size: 10px; horizontal-alignment: right; vertical-alignment: center; }
+                }
+
+                    // 状态胶囊（同时也是「打开网页预览」的入口），高度与右侧按钮一致
+                    Rectangle {
+                        height: 36px;
+                        width: status-label.preferred-width + 38px;
+                        border-radius: 18px;
+                    background: root.status-ok
+                        ? (status-hit.has-hover ? #DDF5EA : #E9F8F1)
+                        : (status-hit.has-hover ? #E8EBF2 : #EFF1F6);
+                    animate background { duration: 90ms; }
+                    // 绿点绝对定位：y 用 (父高 - 自身高)/2 精确垂直居中
+                    Rectangle {
+                        x: 10px;
+                        y: (parent.height - self.height) / 2;
+                        width: 6px;
+                        height: 6px;
+                        border-radius: 3px;
+                        background: root.status-ok ? Theme.ok : #9BA2B3;
+                    }
+                    status-label := Text {
+                        x: 22px;
+                        y: 0;
+                        width: parent.width - 34px;
+                        height: parent.height;
+                        text: root.status-text;
+                        color: root.status-ok ? #12855A : #6C7386;
+                        font-size: 11px;
+                        horizontal-alignment: left;
+                        vertical-alignment: center;
+                    }
+                    status-hit := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.open-web(); }
+                    }
+                }
+
+                    Btn {
+                        text: "设置";
+                        width: 84px;
+                        clicked => { root.settings-open(); }
+                    }
+                }
+            }
+        }
+
+        // ================= 主体 =================
+        HorizontalLayout {
+            padding-top: 14px;
+            padding-bottom: 14px;
+            padding-left: 16px;
+            padding-right: 16px;
+            spacing: 14px;
+
+            // ---------- 左列 ----------
+            VerticalLayout {
+                width: 372px;
+                spacing: 14px;
+
+                // 账号卡片
+                Rectangle {
+                    // 未登录时推荐文案会换行，需要高一点；登录后只有一行，收紧去掉底部留白
+                    height: root.account-text == "" ? 117px : 99px;
+                    background: Theme.card;
+                    border-radius: 14px;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    drop-shadow-blur: 14px;
+                    drop-shadow-color: #10182808;
+                    drop-shadow-offset-y: 2px;
+
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 5px;
+
+                        HorizontalLayout {
+                            spacing: 6px;
+                            SectionTitle { label: "① 账号"; vertical-stretch: 1; }
+                        }
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Btn {
+                                text: "扫码登录";
+                                primary: true;
+                                width: 88px;
+                                enabled: !root.busy;
+                                clicked => { root.qr-login(); }
+                            }
+                            Btn {
+                                text: root.busy ? "读取中…" : "读取稿件";
+                                horizontal-stretch: 1;
+                                enabled: !root.busy;
+                                clicked => { root.read-archives(root.sessdata); }
+                            }
+                            Btn {
+                                text: "清空";
+                                width: 52px;
+                                enabled: !root.busy;
+                                clicked => { root.clear-all(); }
+                            }
+                        }
+
+                        Text {
+                            text: root.account-text == "" ? "推荐扫码登录：一次拿全套 Cookie 与设备指纹，接口校验（-352）基本不会再拦" : root.account-text;
+                            color: root.account-text == "" ? Theme.faint : Theme.ok;
+                            font-size: 10px;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+                // 采集范围卡片
+                Rectangle {
+                    background: Theme.card;
+                    border-radius: 14px;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    drop-shadow-blur: 14px;
+                    drop-shadow-color: #10182808;
+                    drop-shadow-offset-y: 2px;
+
+                    VerticalLayout {
+                        padding: 14px;
+                        spacing: 9px;
+
+                        HorizontalLayout {
+                            spacing: 6px;
+                            SectionTitle { label: "② 采集范围"; vertical-stretch: 1; }
+
+                            Rectangle {
+                                height: 20px;
+                                width: root.scope == 1 ? 62px : 0px;
+                                clip: true;
+                                border-radius: 10px;
+                                background: select-all.has-hover ? #FFF0F5 : transparent;
+                                HorizontalLayout {
+                                    padding-left: 4px;
+                                    padding-right: 4px;
+                                    alignment: center;
+                                    Text { text: "全选 / 反选"; color: Theme.accent-dark; font-size: 9.5px; vertical-alignment: center; }
+                                }
+                                select-all := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.toggle-all(); }
+                                }
+                            }
+
+                            Rectangle {
+                                height: 19px;
+                                border-radius: 10px;
+                                background: root.scope == 0 ? #EEF4FB : Theme.accent-soft;
+                                HorizontalLayout {
+                                    padding-left: 8px;
+                                    padding-right: 8px;
+                                    alignment: center;
+                                    Text {
+                                        text: root.scope == 0 ? "全量" : (root.selected-count + " / " + root.videos.length);
+                                        color: root.scope == 0 ? #4A84B8 : Theme.accent-dark;
+                                        font-size: 10px;
+                                        font-weight: 600;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+
+                        // 范围切换
+                        Rectangle {
+                            height: 30px;
+                            border-radius: 9px;
+                            background: #F1F3F8;
+                            border-width: 1px;
+                            border-color: #E6E9F1;
+
+                            HorizontalLayout {
+                                padding: 3px;
+                                spacing: 3px;
+
+                                Rectangle {
+                                    border-radius: 6px;
+                                    background: root.scope == 0 ? white : transparent;
+                                    border-width: root.scope == 0 ? 1px : 0px;
+                                    border-color: #E9ECF3;
+                                    Text { text: "创作中心"; color: root.scope == 0 ? Theme.accent-dark : Theme.faint; font-size: 10.5px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                                    TouchArea { mouse-cursor: pointer; clicked => { root.scope = 0; } }
+                                }
+
+                                Rectangle {
+                                    border-radius: 6px;
+                                    background: root.scope == 1 ? white : transparent;
+                                    border-width: root.scope == 1 ? 1px : 0px;
+                                    border-color: #E9ECF3;
+                                    Text { text: "仅勾选稿件"; color: root.scope == 1 ? Theme.accent-dark : Theme.faint; font-size: 10.5px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                                    TouchArea { mouse-cursor: pointer; clicked => { root.scope = 1; } }
+                                }
+                            }
+                        }
+
+                        if root.scope == 0 : Rectangle {
+                            vertical-stretch: 1; background: #FBFCFE; border-radius: 10px;
+                            border-width: 1px; border-color: #EDEFF5; clip: true;
+                            VerticalLayout {
+                                alignment: start;
+                                padding: 8px; spacing: 6px;
+                                Text { vertical-stretch: 0; text: "各类型独立页码 · 每页 10 条 · 结束页留空到末页"; color: Theme.faint; font-size: 9px; wrap: word-wrap; }
+                                ScrollView {
+                                    vertical-stretch: 1; content-width: self.visible-width;
+                                    content-height: max(range-list.preferred-height, self.visible-height);
+                                    range-list := VerticalLayout {
+                                        alignment: start;
+                                        height: self.preferred-height;
+                                        spacing: 6px; padding-right: 4px;
+                                    CollectionRangeRow {
+                                        label: "视频"; busy: root.busy;
+                                        selected <=> root.range-video-enabled;
+                                        from-text <=> root.range-video-from;
+                                        to-text <=> root.range-video-to;
+                                        total-text: root.range-video-total;
+                                        selection-changed(value) => { root.range-enabled(1, value); }
+                                    }
+                                    CollectionRangeRow {
+                                        label: "动态"; busy: root.busy;
+                                        selected <=> root.range-dynamic-enabled;
+                                        from-text <=> root.range-dynamic-from;
+                                        to-text <=> root.range-dynamic-to;
+                                        total-text: root.range-dynamic-total;
+                                        selection-changed(value) => { root.range-enabled(11, value); }
+                                    }
+                                    CollectionRangeRow {
+                                        label: "转发动态"; busy: root.busy;
+                                        selected <=> root.range-repost-enabled;
+                                        from-text <=> root.range-repost-from;
+                                        to-text <=> root.range-repost-to;
+                                        total-text: root.range-repost-total;
+                                        selection-changed(value) => { root.range-enabled(17, value); }
+                                    }
+                                    CollectionRangeRow {
+                                        label: "专栏"; busy: root.busy;
+                                        selected <=> root.range-article-enabled;
+                                        from-text <=> root.range-article-from;
+                                        to-text <=> root.range-article-to;
+                                        total-text: root.range-article-total;
+                                        selection-changed(value) => { root.range-enabled(12, value); }
+                                    }
+                                    CollectionRangeRow {
+                                        label: "音频"; busy: root.busy;
+                                        selected <=> root.range-audio-enabled;
+                                        from-text <=> root.range-audio-from;
+                                        to-text <=> root.range-audio-to;
+                                        total-text: root.range-audio-total;
+                                        selection-changed(value) => { root.range-enabled(14, value); }
+                                    }
+                                    }
+                                }
+                                if root.has-resume : HorizontalLayout {
+                                    Text { text: root.resume-text; color: Theme.accent-dark; font-size: 9px; wrap: word-wrap; horizontal-stretch: 1; }
+                                    Btn { text: "清除"; width: 44px; small: true; enabled: !root.busy; clicked => { root.clear-resume(); } }
+                                }
+                            }
+                        }
+
+                        if root.scope == 1 : Rectangle {
+                            vertical-stretch: 1;
+                            background: #FBFCFE;
+                            border-radius: 10px;
+                            border-width: 1px;
+                            border-color: #EDEFF5;
+
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 4px;
+                                visible: root.videos.length == 0;
+                                Text { text: "还没有稿件"; color: #8C93A6; font-size: 11.5px; horizontal-alignment: center; }
+                                Text { text: "点上方「读取稿件」或在下方粘贴 BV 号"; color: Theme.faint; font-size: 10px; horizontal-alignment: center; }
+                            }
+
+                            ListView {
+                                for row[i] in root.videos : Rectangle {
+                                    height: 56px;
+                                    background: row.checked ? #FFF7FA : transparent;
+
+                                    Rectangle {
+                                        y: parent.height - 1px;
+                                        height: 1px;
+                                        width: 100%;
+                                        background: #F2F4F9;
+                                    }
+
+                                    HorizontalLayout {
+                                        padding-left: 9px;
+                                        padding-right: 9px;
+                                        spacing: 9px;
+
+                                        // 勾选框单独包一层，保证固定 18px 在行内垂直居中
+                                        VerticalLayout {
+                                            alignment: center;
+                                            CheckBox { checked: row.checked; }
+                                        }
+
+                                        VerticalLayout {
+                                            spacing: 2px;
+                                            horizontal-stretch: 1;
+                                            alignment: center;
+                                            Text {
+                                                text: row.title == "" ? ("av" + row.bvid) : row.title;
+                                                color: Theme.text;
+                                                font-size: 11.5px;
+                                                horizontal-alignment: left;
+                                                overflow: elide;
+                                                vertical-alignment: center;
+                                            }
+                                            Text {
+                                                text: row.meta;
+                                                color: Theme.faint;
+                                                font-size: 9.5px;
+                                                horizontal-alignment: left;
+                                                overflow: elide;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                    }
+
+                                    TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => { root.toggle-video(i); }
+                                    }
+                                }
+                            }
+                        }
+
+                        if root.scope == 1 : HorizontalLayout {
+                            spacing: 7px;
+
+                            Rectangle {
+                                height: 32px;
+                                border-radius: 9px;
+                                background: Theme.field;
+                                border-width: 1px;
+                                border-color: bv.has-focus ? #FBC3D3 : #E6E9F1;
+                                horizontal-stretch: 1;
+
+                                Text {
+                                    text: "BV 号 / av 号 / 视频链接";
+                                    color: #ABB1C0;
+                                    font-size: 10.5px;
+                                    x: 9px;
+                                    y: 0;
+                                    height: parent.height;
+                                    vertical-alignment: center;
+                                    visible: bv.text == "";
+                                }
+                                bv := TextInput {
+                                    x: 9px;
+                                    y: 0;
+                                    width: parent.width - 18px;
+                                    height: parent.height;
+                                    text <=> root.new-video-text;
+                                    single-line: true;
+                                    color: Theme.text;
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                    accepted => { root.add-video(root.new-video-text); }
+                                }
+                            }
+
+                            Btn {
+                                text: "添加";
+                                width: 56px;
+                                small: true;
+                                enabled: !root.busy;
+                                clicked => { root.add-video(root.new-video-text); }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ---------- 右列 ----------
+            VerticalLayout {
+                spacing: 14px;
+
+                // 采集与导出
+                Rectangle {
+                    height: 172px;
+                    background: Theme.card;
+                    border-radius: 14px;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    drop-shadow-blur: 14px;
+                    drop-shadow-color: #10182808;
+                    drop-shadow-offset-y: 2px;
+
+                    VerticalLayout {
+                        padding: 14px;
+                        spacing: 10px;
+
+                        HorizontalLayout {
+                            spacing: 6px;
+                            SectionTitle { label: "③ 采集与导出"; vertical-stretch: 1; }
+                        }
+
+                        HorizontalLayout {
+                            spacing: 18px;
+
+                            // 二级回复开关
+                            HorizontalLayout {
+                                spacing: 8px;
+                                alignment: LayoutAlignment.start;
+                                Toggle {
+                                    checked <=> root.include-replies;
+                                }
+                                VerticalLayout {
+                                    spacing: 0px;
+                                    alignment: center;
+                                    Text { text: "包含楼中楼回复"; color: Theme.text; font-size: 11.5px; horizontal-alignment: left; vertical-alignment: center; }
+                                    Text { text: "关闭则只保留主评论"; color: Theme.faint; font-size: 9.5px; horizontal-alignment: left; vertical-alignment: center; }
+                                }
+                            }
+
+                            // 主评论 / 回复都不再设页数上限，这里只说明当前抓取范围
+                            VerticalLayout {
+                                spacing: 2px;
+                                alignment: center;
+                                Text { text: "抓取范围"; color: Theme.faint; font-size: 9.5px; vertical-alignment: center; }
+                                Text {
+                                    text: root.scope == 0 ? "各类型独立页码 · 10 条/页" : "勾选稿件的全部评论";
+                                    color: Theme.text;
+                                    font-size: 11.5px;
+                                    font-weight: 600;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+
+                            // 导出（只有 JSON，不再提供格式选择）
+                            Btn {
+                                text: "导出 JSON";
+                                primary: true;
+                                width: 92px;
+                                small: true;
+                                enabled: !root.busy && root.has-data;
+                                clicked => { root.export-clicked(); }
+                            }
+                        }
+
+                        Rectangle { height: 1px; background: #F1F3F8; }
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            if root.busy : Btn {
+                                text: "暂停";
+                                primary: false;
+                                horizontal-stretch: 1;
+                                clicked => { root.pause(); }
+                            }
+                            if root.busy : Btn {
+                                text: "结束";
+                                primary: true;
+                                width: 72px;
+                                clicked => { root.stop(); }
+                            }
+                            if !root.busy : Btn {
+                                text: root.has-resume ? "继续采集（断点）" : (root.scope == 0 ? "开始采集全部评论" : "开始采集所选稿件");
+                                primary: true;
+                                // 全部稿件模式不需要先勾选
+                                enabled: root.scope == 0 ? root.any-range-enabled : root.selected-count > 0;
+                                horizontal-stretch: 1;
+                                clicked => { root.start(); }
+                            }
+                            Btn {
+                                text: "导入合并";
+                                width: 86px;
+                                enabled: !root.busy;
+                                clicked => { root.import-clicked(); }
+                            }
+                            Btn {
+                                text: "导入拆解"; width: 86px; enabled: !root.busy;
+                                clicked => { root.split-import-clicked(); }
+                            }
+                        }
+                    }
+                }
+
+                // 结果
+                Rectangle {
+                    background: Theme.card;
+                    border-radius: 14px;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    drop-shadow-blur: 14px;
+                    drop-shadow-color: #10182808;
+                    drop-shadow-offset-y: 2px;
+                    vertical-stretch: 1;
+
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 7px;
+
+                        HorizontalLayout {
+                            height: 20px;
+                            spacing: 6px;
+                            SectionTitle { label: "④ 结果预览"; vertical-stretch: 1; }
+                        }
+
+                        HorizontalLayout {
+                            spacing: 8px;
+
+                            Rectangle {
+                                height: 54px;
+                                horizontal-stretch: 1;
+                                border-radius: 10px;
+                                background: #F8F9FC;
+                                border-width: 1px;
+                                border-color: #EFF1F7;
+                                VerticalLayout {
+                                    alignment: center;
+                                    Text { text: root.stat-videos; color: Theme.text; font-size: 17px; font-weight: 700; horizontal-alignment: center; }
+                                    Text { text: "稿件"; color: Theme.faint; font-size: 9.5px; horizontal-alignment: center; }
+                                }
+                            }
+                            Rectangle {
+                                height: 54px;
+                                horizontal-stretch: 1;
+                                border-radius: 10px;
+                                background: #F8F9FC;
+                                border-width: 1px;
+                                border-color: #EFF1F7;
+                                VerticalLayout {
+                                    alignment: center;
+                                    Text { text: root.stat-dynamics; color: Theme.text; font-size: 17px; font-weight: 700; horizontal-alignment: center; }
+                                    Text { text: "动态"; color: Theme.faint; font-size: 9.5px; horizontal-alignment: center; }
+                                }
+                            }
+                            Rectangle {
+                                height: 54px;
+                                horizontal-stretch: 1;
+                                border-radius: 10px;
+                                background: #F8F9FC;
+                                border-width: 1px;
+                                border-color: #EFF1F7;
+                                VerticalLayout {
+                                    alignment: center;
+                                    Text { text: root.stat-comments; color: Theme.text; font-size: 17px; font-weight: 700; horizontal-alignment: center; }
+                                    Text { text: "主评论"; color: Theme.faint; font-size: 9.5px; horizontal-alignment: center; }
+                                }
+                            }
+                            Rectangle {
+                                height: 54px;
+                                horizontal-stretch: 1;
+                                border-radius: 10px;
+                                background: #F8F9FC;
+                                border-width: 1px;
+                                border-color: #EFF1F7;
+                                VerticalLayout {
+                                    alignment: center;
+                                    Text { text: root.stat-replies; color: Theme.text; font-size: 17px; font-weight: 700; horizontal-alignment: center; }
+                                    Text { text: "二级回复"; color: Theme.faint; font-size: 9.5px; horizontal-alignment: center; }
+                                }
+                            }
+                            Rectangle {
+                                height: 54px;
+                                horizontal-stretch: 1;
+                                border-radius: 10px;
+                                background: Theme.accent-soft;
+                                border-width: 1px;
+                                border-color: #FFE1EB;
+                                VerticalLayout {
+                                    alignment: center;
+                                    Text { text: root.stat-likes; color: Theme.accent-dark; font-size: 17px; font-weight: 700; horizontal-alignment: center; }
+                                    Text { text: "累计点赞"; color: #C97C97; font-size: 9.5px; horizontal-alignment: center; }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            background: #FBFCFE;
+                            border-radius: 10px;
+                            border-width: 1px;
+                            border-color: #EDEFF5;
+                            vertical-stretch: 1;
+                            clip: true;
+
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 6px;
+                                visible: !root.has-data;
+                                HorizontalLayout {
+                                    alignment: center;
+                                    Rectangle {
+                                        width: 42px;
+                                        height: 42px;
+                                        border-radius: 21px;
+                                        background: #F2F4FA;
+                                        Text { text: "{ }"; color: #B7BDCC; font-size: 14px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+                                    }
+                                }
+                                Text { text: "采集完成后，这里显示导出的数据预览"; color: #9AA1B2; font-size: 11px; horizontal-alignment: center; }
+                            }
+
+                            ScrollView {
+                                visible: root.has-data;
+                                content-width: self.width;
+                                Text {
+                                    text: root.preview-text;
+                                    color: #4A5063;
+                                    font-size: 10.5px;
+                                    wrap: word-wrap;
+                                    width: parent.width - 20px;
+                                    x: 10px;
+                                    y: 8px;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 日志
+                Rectangle {
+                    height: 132px;
+                    background: #171A22;
+                    border-radius: 14px;
+                    border-width: 1px;
+                    border-color: #23262F;
+                    drop-shadow-blur: 14px;
+                    drop-shadow-color: #10182812;
+                    drop-shadow-offset-y: 2px;
+
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 6px;
+
+                        HorizontalLayout {
+                            height: 20px;
+                            spacing: 6px;
+                            Text { text: "运行日志"; color: #E7E9EF; font-size: 11px; font-weight: 700; vertical-alignment: center; }
+                            Text { text: "最新在上"; color: #6B7285; font-size: 9.5px; vertical-alignment: center; }
+                        }
+
+                        Rectangle {
+                            vertical-stretch: 1; clip: true; background: transparent;
+                            log-scroll := ScrollView {
+                                width: parent.width; height: parent.height;
+                                content-width: self.visible-width;
+                                content-height: max(log-body.preferred-height + 8px, self.visible-height);
+                                log-body := Text {
+                                    x: 0px; y: 0px; width: log-scroll.visible-width - 12px;
+                                    height: self.preferred-height;
+                                    text: root.log-text; color: #A8B0C2; font-size: 10px; wrap: word-wrap;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ================= 状态栏 =================
+        Rectangle {
+            height: 30px;
+            background: Theme.card;
+
+            Rectangle {
+                y: 0px;
+                height: 1px;
+                width: 100%;
+                background: Theme.border;
+            }
+
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                spacing: 8px;
+                Rectangle { horizontal-stretch: 1; background: transparent; }
+                Text { text: "BiliCommentHub v1.0"; color: Theme.faint; font-size: 10px; vertical-alignment: center; }
+            }
+        }
+    }
+
+    // ================= 风控弹窗 =================
+    Rectangle {
+        visible: root.verify-visible;
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+        background: #0B12204D;
+
+        Rectangle {
+            width: 440px;
+            height: 214px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: 16px;
+            background: white;
+            border-width: 1px;
+            border-color: #FFE1EB;
+            drop-shadow-blur: 34px;
+            drop-shadow-color: #0F172A38;
+
+            VerticalLayout {
+                padding: 20px;
+                spacing: 8px;
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    Rectangle {
+                        width: 28px;
+                        height: 28px;
+                        border-radius: 9px;
+                        background: #FFF0F5;
+                        Text { text: "!"; color: Theme.accent-dark; font-size: 15px; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                    Text {
+                        text: "接口触发风控，正在自动等待";
+                        color: Theme.text;
+                        font-size: 14.5px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Text {
+                    text: root.verify-text;
+                    color: Theme.muted;
+                    font-size: 11.5px;
+                    wrap: word-wrap;
+                }
+
+                Text {
+                    text: root.verify-secs > 0
+                        ? (root.progress-text == ""
+                            ? ("剩余 " + root.verify-secs + " 秒")
+                            : ("剩余 " + root.verify-secs + " 秒 · " + root.progress-text))
+                        : (root.progress-text == "" ? "正在检查接口是否恢复…" : ("正在检查接口是否恢复 · " + root.progress-text));
+                    color: Theme.accent-dark;
+                    font-size: 12px;
+                    font-weight: 600;
+                }
+
+                Text {
+                    text: "默认每次等待 60 秒，倒计时结束后检查原采集接口；请求成功后才自动关闭。仍受限时继续等待，也可打开创作中心过验证或后台等待。";
+                    color: Theme.faint;
+                    font-size: 10px;
+                    wrap: word-wrap;
+                }
+
+                Rectangle { vertical-stretch: 1; background: transparent; }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: end;
+                    Btn {
+                        text: "打开浏览器过验证";
+                        primary: true;
+                        width: 148px;
+                        small: true;
+                        clicked => { root.verify-open(); }
+                    }
+                    Btn {
+                        text: "后台继续等";
+                        width: 96px;
+                        small: true;
+                        clicked => { root.verify-dismiss(); }
+                    }
+                }
+            }
+        }
+    }
+
+    // ================= 设置弹窗 =================
+    Rectangle {
+        visible: root.settings-visible;
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+        background: #0B12204D;
+
+        TouchArea {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            mouse-cursor: default;
+            clicked => { root.settings-close(); }
+        }
+
+        Rectangle {
+            width: 478px;
+            height: 390px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: 16px;
+            background: white;
+            border-width: 1px;
+            border-color: #E6E9F1;
+            drop-shadow-blur: 34px;
+            drop-shadow-color: #0F172A38;
+
+            TouchArea { }
+
+            VerticalLayout {
+                padding: 20px;
+                spacing: 13px;
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    Rectangle {
+                        width: 28px;
+                        height: 28px;
+                        border-radius: 9px;
+                        background: #FFF0F5;
+                        Text { text: "设"; color: Theme.accent-dark; font-size: 13px; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                    Text { text: "设置"; color: Theme.text; font-size: 14.5px; font-weight: 700; vertical-alignment: center; }
+                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                    Rectangle {
+                        width: 24px; height: 24px; border-radius: 7px;
+                        background: close-settings.has-hover ? #F1F3F8 : transparent;
+                        Text { text: "×"; color: Theme.muted; font-size: 17px; horizontal-alignment: center; vertical-alignment: center; }
+                        close-settings := TouchArea { mouse-cursor: pointer; clicked => { root.settings-close(); } }
+                    }
+
+
+                }
+
+                Rectangle { height: 1px; background: #F1F3F8; }
+
+                // ---- 网页端口 ----
+                VerticalLayout {
+                    spacing: 5px;
+                    Text { text: "网页端口"; color: Theme.text; font-size: 11.5px; font-weight: 600; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Rectangle {
+                            width: 108px;
+                            height: 32px;
+                            border-radius: 9px;
+                            background: Theme.field;
+                            border-width: 1px;
+                            border-color: port-in.has-focus ? #FBC3D3 : #E6E9F1;
+
+                            port-in := TextInput {
+                                x: 9px;
+                                y: 0;
+                                width: parent.width - 18px;
+                                height: parent.height;
+                                text <=> root.web-port-text;
+                                input-type: number;
+                                single-line: true;
+                                color: Theme.text;
+                                font-size: 11.5px;
+                                vertical-alignment: center;
+                            }
+                        }
+                        Btn {
+                            text: "打开网页";
+                            width: 88px;
+                            small: true;
+                            enabled: root.web-running;
+                            clicked => { root.settings-open-web(); }
+                        }
+                        Btn {
+                            text: root.web-running ? "停止" : "启动";
+                            width: 62px;
+                            small: true;
+                            primary: root.web-running;
+                            clicked => { root.settings-toggle-web(); }
+                        }
+                        Rectangle { horizontal-stretch: 1; background: transparent; }
+                    }
+                    Text { text: root.web-running ? "服务运行中 · " + root.web-address : "服务未运行"; color: Theme.faint; font-size: 9.5px; wrap: word-wrap; }
+                }
+
+                // ---- 翻页间隔 ----
+                VerticalLayout {
+                    spacing: 5px;
+                    Text { text: "翻页间隔（毫秒）"; color: Theme.text; font-size: 11.5px; font-weight: 600; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Rectangle {
+                            width: 76px;
+                            height: 32px;
+                            border-radius: 9px;
+                            background: Theme.field;
+                            border-width: 1px;
+                            border-color: delay-in.has-focus ? #FBC3D3 : #E6E9F1;
+
+                            delay-in := TextInput {
+                                x: 9px;
+                                y: 0;
+                                width: parent.width - 18px;
+                                height: parent.height;
+                                text <=> root.page-delay-text;
+                                input-type: number;
+                                single-line: true;
+                                color: Theme.text;
+                                font-size: 11.5px;
+                                vertical-alignment: center;
+                            }
+                        }
+                        Text { text: "~"; color: Theme.faint; font-size: 12px; vertical-alignment: center; }
+                        Rectangle {
+                            width: 76px;
+                            height: 32px;
+                            border-radius: 9px;
+                            background: Theme.field;
+                            border-width: 1px;
+                            border-color: delay-max-in.has-focus ? #FBC3D3 : #E6E9F1;
+
+                            delay-max-in := TextInput {
+                                x: 9px;
+                                y: 0;
+                                width: parent.width - 18px;
+                                height: parent.height;
+                                text <=> root.page-delay-max-text;
+                                input-type: number;
+                                single-line: true;
+                                color: Theme.text;
+                                font-size: 11.5px;
+                                vertical-alignment: center;
+                            }
+                        }
+                        Text {
+                            text: "每翻一页在此区间随机；两值相同或留空相同则固定。越大越不易触发风控，但更慢";
+                            color: Theme.faint;
+                            font-size: 9.5px;
+                            vertical-alignment: center;
+                            wrap: word-wrap;
+                            horizontal-stretch: 1;
+                        }
+                    }
+                }
+
+                // ---- 导出目录 ----
+                VerticalLayout {
+                    spacing: 5px;
+                    Text { text: "导出目录"; color: Theme.text; font-size: 11.5px; font-weight: 600; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Rectangle {
+                            height: 32px;
+                            horizontal-stretch: 1;
+                            border-radius: 9px;
+                            background: Theme.field;
+                            border-width: 1px;
+                            border-color: #E6E9F1;
+                            clip: true;
+
+                            Text {
+                                text: root.export-dir-text == "" ? "（默认：应用配置目录下的 exports）" : root.export-dir-text;
+                                color: root.export-dir-text == "" ? #ABB1C0 : Theme.text;
+                                font-size: 10.5px;
+                                x: 9px;
+                                y: 0;
+                                width: parent.width - 18px;
+                                height: parent.height;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                        }
+                        Btn { text: "选择"; width: 56px; small: true; clicked => { root.settings-pick-dir(); } }
+                        Btn { text: "打开"; width: 56px; small: true; clicked => { root.settings-open-dir(); } }
+                    }
+                }
+
+                // ---- 默认导出 ----
+                HorizontalLayout {
+                    spacing: 12px;
+                    VerticalLayout {
+                        spacing: 2px;
+                        horizontal-stretch: 1;
+                        alignment: center;
+                        Text { text: "采集完成后自动导出"; color: Theme.text; font-size: 11.5px; font-weight: 600; }
+                        Text {
+                            text: "按作者 UID 和内容类型分类，每个稿件一个 JSON；重复采集增量合并";
+                            color: Theme.faint;
+                            font-size: 9.5px;
+                            wrap: word-wrap;
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        Toggle {
+                            checked <=> root.auto-export;
+                        }
+                    }
+                }
+
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: end;
+                    Btn {
+                        text: "保存";
+                        width: 84px;
+                        primary: true;
+                        small: true;
+                        clicked => { root.settings-apply(); }
+                    }
+                }
+            }
+        }
+    }
+
+    // ================= 扫码登录弹窗 =================
+    Rectangle {
+        visible: root.qr-visible;
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+        background: #0B12204D;
+
+        Rectangle {
+            width: 380px;
+            height: 462px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: 16px;
+            background: white;
+            border-width: 1px;
+            border-color: #FFE1EB;
+            drop-shadow-blur: 34px;
+            drop-shadow-color: #0F172A38;
+
+            VerticalLayout {
+                padding: 20px;
+                spacing: 10px;
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    Rectangle {
+                        width: 28px;
+                        height: 28px;
+                        border-radius: 9px;
+                        background: #FFF0F5;
+                        Text { text: "扫"; color: Theme.accent-dark; font-size: 13px; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                    Text {
+                        text: "扫码登录";
+                        color: Theme.text;
+                        font-size: 14.5px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                    Text {
+                        text: "一次拿全 Cookie";
+                        color: Theme.faint;
+                        font-size: 10px;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Rectangle {
+                    height: 238px;
+                    border-radius: 12px;
+                    background: Theme.field;
+                    border-width: 1px;
+                    border-color: #E6E9F1;
+
+                    Image {
+                        source: root.qr-image;
+                        width: 226px;
+                        height: 226px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        image-fit: contain;
+                        visible: !root.qr-empty;
+                    }
+
+                    Text {
+                        text: "正在获取二维码…";
+                        visible: root.qr-empty;
+                        color: Theme.faint;
+                        font-size: 11.5px;
+                        width: parent.width;
+                        height: parent.height;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Text {
+                    text: root.qr-status;
+                    color: Theme.accent-dark;
+                    font-size: 12px;
+                    font-weight: 600;
+                    horizontal-alignment: center;
+                    width: parent.width;
+                }
+
+                Text {
+                    text: "打开 B 站手机客户端 → 我的 → 右上角「扫一扫」。扫码后会拿到 SESSDATA、bili_jct、DedeUserID 与 buvid3/4 整套凭据，保存在本机配置里。";
+                    color: Theme.faint;
+                    font-size: 10px;
+                    wrap: word-wrap;
+                }
+
+                Rectangle { vertical-stretch: 1; background: transparent; }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    Btn {
+                        text: "换个二维码";
+                        width: 104px;
+                        small: true;
+                        clicked => { root.qr-login(); }
+                    }
+                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                    Btn {
+                        text: "取消";
+                        width: 80px;
+                        small: true;
+                        primary: true;
+                        clicked => { root.qr-cancel(); }
+                    }
+                }
+            }
+        }
+    }
+    // Modal alerts stay above settings and block accidental background clicks.
+    Rectangle {
+        visible: root.alert-visible;
+        width: parent.width; height: parent.height; background: #0B122066;
+        TouchArea { }
+        Rectangle {
+            width: 360px; height: 162px;
+            x: (parent.width - self.width)/2; y: (parent.height - self.height)/2;
+            background: white; border-radius: 14px;
+            VerticalLayout {
+                padding: 20px; spacing: 12px;
+                Text { text: "提示"; color: Theme.text; font-size: 15px; font-weight: 700; }
+                Text { text: root.alert-text; color: Theme.muted; font-size: 12px; wrap: word-wrap; vertical-stretch: 1; }
+                HorizontalLayout {
+                    alignment: end;
+                    Btn { text: "确定"; width: 76px; small: true; primary: true; clicked => { root.alert-visible = false; } }
+                }
+            }
+        }
+    }
+
+}

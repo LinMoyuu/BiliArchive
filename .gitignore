@@ -1,0 +1,43 @@
+# Rust build output (keep Cargo.lock for this application)
+/target/
+/dist/
+/build/
+/release/
+/outputs/
+*.exe
+*.dll
+*.pdb
+*.msi
+
+# Collected data, archives, checkpoints and local test output
+/out/
+/exports/
+/checkpoints/
+/test-out/
+/BiliCommentHubData/
+/bili-comments*.json
+/all.json
+*.log
+
+# Local credentials and environment files
+/config.json
+/credentials*.json
+/cookies*.json
+/cookie*.txt
+/sessdata*.txt
+.env
+.env.*
+!.env.example
+*.pfx
+*.p12
+
+# Editor, OS and scratch files
+/.idea/
+/.vscode/
+/work/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
