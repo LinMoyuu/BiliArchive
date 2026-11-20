@@ -367,6 +367,7 @@ fn set_foot(ui: &Weak<AppWindow>, text: String) {
 fn verify_show(ui: &Weak<AppWindow>, secs: u64, text: String) {
     emit(ui, move |w| {
         w.set_verify_text(text.into());
+        w.set_verify_waiting(true);
         w.set_verify_secs(secs as i32);
         if !w.get_verify_background() { w.set_verify_visible(true); }
     });
@@ -377,7 +378,7 @@ fn verify_tick(ui: &Weak<AppWindow>, secs: u64) {
 }
 
 fn verify_hide(ui: &Weak<AppWindow>) {
-    emit(ui, |w| { w.set_verify_visible(false); w.set_verify_background(false); });
+    emit(ui, |w| { w.set_verify_visible(false); w.set_verify_background(false); w.set_verify_waiting(false); w.set_verify_secs(0); });
 }
 
 // ---------------- 扫码登录 ----------------
@@ -2862,6 +2863,22 @@ mod settings_component_tests {
         set_account(&shared, &weak, 456);
         assert!(shared.doc.lock().unwrap().videos.is_empty());
         assert!(shared.rows.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn progress_shows_wait_time_even_when_dialog_is_hidden() {
+        let window=MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+        slint::platform::set_platform(Box::new(Headless(window))).unwrap();
+        let ui=AppWindow::new().unwrap();
+        ui.set_progress_text("视频第 3 页".into());
+        ui.set_verify_waiting(true);ui.set_verify_secs(60);
+        assert_eq!(ui.get_progress_display_text().as_str(),"视频第 3 页 · 风控等待 60 秒");
+        ui.set_verify_visible(false);ui.set_verify_background(true);ui.set_verify_secs(59);
+        assert!(ui.get_progress_display_text().as_str().contains("59 秒"));
+        ui.set_verify_secs(0);
+        assert!(ui.get_progress_display_text().as_str().contains("正在检查恢复"));
+        ui.set_verify_waiting(false);
+        assert_eq!(ui.get_progress_display_text().as_str(),"视频第 3 页");
     }
 }
 

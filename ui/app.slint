@@ -168,6 +168,9 @@ export component AppWindow inherits Window {
     in-out property <string> resume-text: "";
     in-out property <float> progress: 0.0;
     in-out property <string> progress-text: "";
+    in-out property <bool> verify-waiting: false;
+    out property <string> progress-display-text: root.progress-text + (root.verify-waiting
+        ? (root.verify-secs > 0 ? " · 风控等待 " + root.verify-secs + " 秒" : " · 正在检查恢复…") : "");
     in-out property <string> account-text: "";
     in-out property <[VideoRow]> videos: [];
     in-out property <int> selected-count: 0;
@@ -314,7 +317,7 @@ export component AppWindow inherits Window {
                             animate width { duration: 160ms; }
                         }
                     }
-                    Text { text: root.progress-text; color: Theme.muted; font-size: 10px; horizontal-alignment: right; vertical-alignment: center; }
+                    Text { text: root.progress-display-text; color: Theme.muted; font-size: 10px; horizontal-alignment: right; vertical-alignment: center; }
                 }
 
                     // 状态胶囊（同时也是「打开网页预览」的入口），高度与右侧按钮一致
