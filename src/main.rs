@@ -767,6 +767,7 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                     restore_checkpoint(&shared, &ui, uid);
                 }
 
+                set_progress(&ui, 0.1, "正在读取线上稿件…".into());
                 let mut all: Vec<Video> = Vec::new();
                 let mut pn = 1u64;
                 let ps = 50u64;
