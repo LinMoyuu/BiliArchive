@@ -521,14 +521,14 @@ export component AppWindow inherits Window {
                             vertical-stretch: 1; background: #FBFCFE; border-radius: 10px;
                             border-width: 1px; border-color: #EDEFF5; clip: true;
                             VerticalLayout {
-                                alignment: start;
+                                alignment: LayoutAlignment.start;
                                 padding: 8px; spacing: 6px;
                                 Text { vertical-stretch: 0; text: "各类型独立页码 · 每页 10 条 · 结束页留空到末页"; color: Theme.faint; font-size: 9px; wrap: word-wrap; }
                                 ScrollView {
                                     vertical-stretch: 1; content-width: self.visible-width;
                                     content-height: max(range-list.preferred-height, self.visible-height);
                                     range-list := VerticalLayout {
-                                        alignment: start;
+                                        alignment: LayoutAlignment.start;
                                         height: self.preferred-height;
                                         spacing: 6px; padding-right: 4px;
                                     CollectionRangeRow {
