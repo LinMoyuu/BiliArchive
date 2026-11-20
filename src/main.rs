@@ -2578,19 +2578,7 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
 
-    // ---- 风控弹窗：打开验证页 / 后台继续等 ----
-    {
-        let weak = weak.clone();
-        ui.on_verify_open(move || {
-            let _ = webbrowser::open(
-                "https://member.bilibili.com/platform/inter-active/comment/article",
-            );
-            set_foot(
-                &weak,
-                "已打开创作中心：过完验证后回到程序，会自动继续".into(),
-            );
-        });
-    }
+    // ---- 风控弹窗：后台继续等 ----
     {
         let weak = weak.clone();
         ui.on_verify_dismiss(move || {

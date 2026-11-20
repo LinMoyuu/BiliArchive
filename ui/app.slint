@@ -239,7 +239,6 @@ export component AppWindow inherits Window {
     callback import-clicked();
     callback open-dir();
     callback clear-all();
-    callback verify-open();
     callback verify-dismiss();
     callback qr-login();
     callback qr-cancel();
@@ -1058,7 +1057,7 @@ export component AppWindow inherits Window {
                 }
 
                 Text {
-                    text: "默认每次等待 60 秒，倒计时结束后检查原采集接口；请求成功后才自动关闭。仍受限时继续等待，也可打开创作中心过验证或后台等待。";
+                    text: "默认每次等待 60 秒，倒计时结束后检查原采集接口；请求成功后才自动关闭。仍受限时继续等待。";
                     color: Theme.faint;
                     font-size: 10px;
                     wrap: word-wrap;
@@ -1069,13 +1068,6 @@ export component AppWindow inherits Window {
                 HorizontalLayout {
                     spacing: 8px;
                     alignment: end;
-                    Btn {
-                        text: "打开浏览器过验证";
-                        primary: true;
-                        width: 148px;
-                        small: true;
-                        clicked => { root.verify-open(); }
-                    }
                     Btn {
                         text: "后台继续等";
                         width: 96px;
