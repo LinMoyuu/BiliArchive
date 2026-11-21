@@ -51,7 +51,7 @@ pub struct Stats {
     /// 带 IP 属地的评论 / 回复条数
     #[serde(default)]
     pub with_location: usize,
-    /// 动态条数（kind = dynamic 的内容）
+    /// 动态条数（JSON type = dynamic 的内容）
     #[serde(default)]
     pub dynamics: usize,
 }
@@ -66,8 +66,8 @@ pub struct Video {
     pub url: String,
     pub cover: String,
     /// 内容类型：video 视频 / dynamic 动态 / article 专栏。
-    /// 老数据没有这个字段，按视频处理
-    #[serde(default)]
+    /// JSON 字段为 type，必须提供；不兼容旧 kind 字段。
+    #[serde(rename = "type")]
     pub kind: String,
     /// B 站评论接口里的 type：1 视频 / 11 图文动态 / 17 转发动态 / 12 专栏
     #[serde(default)]
@@ -463,5 +463,20 @@ mod continuation_merge_tests {
         assert_eq!(doc.videos[0].comments[0].rpid,1);
         assert_eq!(doc.videos[0].comments[0].replies.len(),1);
         assert_eq!(doc.stats.comments,1);assert_eq!(doc.stats.replies,1);
+    }
+}
+
+#[cfg(test)]
+mod public_type_field_tests {
+    use super::*;
+    #[test]
+    fn serializes_type_and_rejects_legacy_kind() {
+        let video=Video{kind:"dynamic".into(),aid:42,owner_mid:123,..Default::default()};
+        let value=serde_json::to_value(&video).unwrap();
+        assert_eq!(value["type"],"dynamic");assert!(value.get("kind").is_none());
+        assert_eq!(serde_json::from_value::<Video>(value.clone()).unwrap().kind,"dynamic");
+        let mut old=value.clone();let object=old.as_object_mut().unwrap();
+        let ty=object.remove("type").unwrap();object.insert("kind".into(),ty);
+        assert!(serde_json::from_value::<Video>(old).is_err());
     }
 }

@@ -135,6 +135,7 @@ fn handle(mut stream: TcpStream, doc: Arc<Mutex<ArchiveDoc>>) {
                         json!({
                             "aid": v.aid,
                             "bvid": v.bvid,
+                            "type": v.kind,
                             "title": v.display_title(),
                             "cover": v.cover,
                             "url": v.url,

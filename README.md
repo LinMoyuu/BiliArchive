@@ -160,7 +160,7 @@ exports/
 | --- | --- |
 | `aid` | 选择指定编号的稿件 |
 | `filter` | `all`、`hidden`、`public` |
-| `kind` | `all`、`video`、`dynamic`、`article`、`audio`；动态包含转发动态 |
+| `type` | `all`、`video`、`dynamic`、`article`、`audio`；动态包含转发动态 |
 | `vq` | 稿件搜索词 |
 | `q` | 评论搜索词 |
 | `sort` | 评论排序：`like`、`old`、`new`；旧值 `time` 按最新处理 |
@@ -256,7 +256,7 @@ $env:BILI_COMMENT_HUB_CONFIG_DIR = 'D:\BiliCommentHubData'
 
 文档根节点由 `meta`、`stats`、`videos` 组成，当前 `format_version` 为 `2`。`videos` 是沿用的字段名称，实际可包含五种内容类型。
 
-- 稿件包含 `aid`、`bvid`、`kind`、`comment_type`、作者、标题、链接、封面、发布时间及 `comments`。
+- 稿件包含 `aid`、`bvid`、`type`、`comment_type`、作者、标题、链接、封面、发布时间及 `comments`。
 - 动态等内容还可包含正文、图片、`dynamic_id`、转发原文及内容本身的赞评转信息。
 - 主评论包含 `rpid`、用户信息、正文、点赞、时间、IP 属地、图片、置顶标记及 `replies`。
 - 回复包含自己的 `rpid`、用户信息、正文、时间、点赞、图片和父级 ID。
@@ -292,3 +292,5 @@ cargo test --locked
 请仅处理你有权访问的数据，合理设置请求间隔。接口数据和可访问范围可能随 B 站调整而变化，降低频率或等待重试不保证能够绕过限制。
 
 导出文件可能包含评论者 UID、昵称和评论内容；分享或公开前请自行检查。登录凭证、配置文件及系统凭据库记录不应随评论文件一并分享。
+
+稿件 JSON 的内容类型字段统一为 `type`，不再读取旧 `kind` 字段；网页筛选参数同样使用 `type`。旧文件需要先更新字段后再导入。

@@ -247,12 +247,12 @@
         <button class="chip" data-f="hidden" aria-pressed="false">已删除 / 仅自己可见</button>
         <button class="chip" data-f="public" aria-pressed="false">公开</button>
       </div>
-      <div class="chips" id="kindFilters">
-        <button class="chip" data-k="all" aria-pressed="true">所有</button>
-        <button class="chip" data-k="video" aria-pressed="false">视频</button>
-        <button class="chip" data-k="dynamic" aria-pressed="false">动态</button>
-        <button class="chip" data-k="article" aria-pressed="false">专栏</button>
-        <button class="chip" data-k="audio" aria-pressed="false">音频</button>
+      <div class="chips" id="typeFilters">
+        <button class="chip" data-type="all" aria-pressed="true">所有</button>
+        <button class="chip" data-type="video" aria-pressed="false">视频</button>
+        <button class="chip" data-type="dynamic" aria-pressed="false">动态</button>
+        <button class="chip" data-type="article" aria-pressed="false">专栏</button>
+        <button class="chip" data-type="audio" aria-pressed="false">音频</button>
       </div>
       <div class="seg" id="videoSortSeg" role="group" aria-label="稿件时间排序">
         <button data-video-sort="new" aria-pressed="true">时间倒序</button>
@@ -293,9 +293,9 @@ const PAGE = 30;              // 每批往页面上拼多少条
 
 const state = {
   doc: null,
-  key: '',                    // 当前选中的内容：kind-aid（动态的 id 和视频 aid 可能撞号）
+  key: '',                    // 当前选中的内容：type-aid（动态的 id 和视频 aid 可能撞号）
   filter: 'all',
-  kind: 'all',                // 左侧内容类型：all | video | dynamic | article | audio
+  type: 'all',                // 左侧内容类型：all | video | dynamic | article | audio
   vq: '',                     // 左侧：稿件搜索
   q: '',                      // 右侧：评论区搜索
   videoSort: 'new',           // 稿件排序，与评论排序独立
@@ -446,7 +446,7 @@ fetch('/api/data.json').then(r=>r.json()).then(d=>{
   if(!state.doc.videos) state.doc.videos = [];
   const usp = new URLSearchParams(location.search);
   if(['all','hidden','public'].includes(usp.get('filter'))) state.filter = usp.get('filter');
-  if(['all','video','dynamic','article','audio'].includes(usp.get('kind'))) state.kind = usp.get('kind');
+  if(['all','video','dynamic','article','audio'].includes(usp.get('type'))) state.type = usp.get('type');
   const sortParam = usp.get('sort');
   if(['new','old','like','time'].includes(sortParam)){
     state.sort = sortParam === 'time' ? 'new' : sortParam;   // time 是旧值，按最新处理
@@ -456,7 +456,7 @@ fetch('/api/data.json').then(r=>r.json()).then(d=>{
 
   renderStats();
   renderFilters();
-  renderKindFilters();
+  renderTypeFilters();
   renderSort();
   renderVideoSort();
   syncSearchBoxes();
@@ -505,8 +505,8 @@ function videoHitsQuery(v, q){
 function matchVideo(v){
   if(state.filter==='hidden' && !['deleted','private','rejected'].includes(v.status)) return false;
   if(state.filter==='public' && v.status!=='public') return false;
-  // 老数据没有 kind 字段，按视频处理
-  if(state.kind !== 'all' && kindOf(v) !== state.kind) return false;
+  // 按内容类型筛选
+  if(state.type !== 'all' && typeOf(v) !== state.type) return false;
   if(!state.vq) return true;
   return videoHitsQuery(v, state.vq);
 }
@@ -526,24 +526,24 @@ function renderFilters(){
   });
 }
 
-function renderKindFilters(){
-  document.querySelectorAll('#kindFilters .chip').forEach(b=>{
-    b.setAttribute('aria-pressed', String(b.dataset.k===state.kind));
+function renderTypeFilters(){
+  document.querySelectorAll('#typeFilters .chip').forEach(b=>{
+    b.setAttribute('aria-pressed', String(b.dataset.type===state.type));
     b.onclick = ()=>{
-      state.kind = b.dataset.k;
-      renderKindFilters();
+      state.type = b.dataset.type;
+      renderTypeFilters();
       renderList();
     };
   });
 }
 
-const KIND_NAME = {video:'视频', dynamic:'动态', article:'专栏', audio:'音频'};
-function keyOf(v){ return (v.kind||'video') + '-' + v.aid; }
-function kindOf(v){ return v.kind || 'video'; }
-function isPlainKind(v){ const k = kindOf(v); return k==='dynamic'||k==='article'||k==='audio'; }
+const TYPE_NAME = {video:'视频', dynamic:'动态', article:'专栏', audio:'音频'};
+function keyOf(v){ return (v.type||'video') + '-' + v.aid; }
+function typeOf(v){ return v.type || 'video'; }
+function isPlainType(v){ const k = typeOf(v); return k==='dynamic'||k==='article'||k==='audio'; }
 // 每种内容的官方编号都不一样：动态是 opus id，专栏 cv，音频 au，视频 bvid/av
 function idLabel(v){
-  switch(kindOf(v)){
+  switch(typeOf(v)){
     case 'dynamic': return '动态 ID ' + (v.dynamic_id || v.aid);
     case 'article': return 'cv' + v.aid;
     case 'audio':   return 'au' + v.aid;
@@ -554,8 +554,8 @@ function idLabel(v){
 function dynTitle(v){
   const line = (v.text||'').split('\n').map(x=>x.trim()).find(Boolean) || '';
   if(line) return line.length > 80 ? line.slice(0,80)+'…' : line;
-  const kindName = KIND_NAME[kindOf(v)] || '内容';
-  return kindName + ' ' + (kindOf(v)==='dynamic' && v.dynamic_id ? v.dynamic_id : v.aid);
+  const kindName = TYPE_NAME[typeOf(v)] || '内容';
+  return kindName + ' ' + (typeOf(v)==='dynamic' && v.dynamic_id ? v.dynamic_id : v.aid);
 }
 function findContent(key){
   return (state.doc.videos||[]).find(x=>keyOf(x)===key);
@@ -569,18 +569,18 @@ function renderList(){
   $('vlist').innerHTML = list.map(v=>{
     const cnt = (v.comments||[]).length;
     const badge = STATUS_LABEL[v.status] ? `<span class="badge ${STATUS_BADGE[v.status]}">${STATUS_LABEL[v.status]}</span>` : '';
-    const KN = KIND_NAME[kindOf(v)] || KIND_NAME.video;
-    const kindBadge = isPlainKind(v) ? `<span class="badge k">${KN}</span>` : '';
-    const coverSrc = v.cover || (v.kind==='dynamic' && (v.text_pics||[])[0]) || '';
+    const KN = TYPE_NAME[typeOf(v)] || TYPE_NAME.video;
+    const typeBadge = isPlainType(v) ? `<span class="badge k">${KN}</span>` : '';
+    const coverSrc = v.cover || (v.type==='dynamic' && (v.text_pics||[])[0]) || '';
     const cover = coverHTML(coverSrc, KN[0]);
     const dl = dateLabel(v);
-    const rowTitle = v.title || (isPlainKind(v) ? dynTitle(v) : ('av'+v.aid));
+    const rowTitle = v.title || (isPlainType(v) ? dynTitle(v) : ('av'+v.aid));
     return `<div class="vrow${keyOf(v)===state.key?' active':''}" data-key="${keyOf(v)}">
       <div class="thumb">${cover}</div>
       <div style="min-width:0">
         <p class="vtitle">${hl(rowTitle, state.vq)}</p>
         <div class="vmeta">
-          ${kindBadge}
+          ${typeBadge}
           ${badge}
           ${dl}
           <span>抓取 ${num(cnt)}</span>
@@ -608,12 +608,12 @@ function selectVideo(key, opts){
   history.replaceState(null,'','#'+encodeURIComponent(key));
   const v = findContent(key);
   if(!v) return;
-  const kind = kindOf(v);
-  const KN = KIND_NAME[kind] || KIND_NAME.video;
-  const plain = isPlainKind(v);
-  const dyn = kind === 'dynamic';
+  const type = typeOf(v);
+  const KN = TYPE_NAME[type] || TYPE_NAME.video;
+  const plain = isPlainType(v);
+  const dyn = type === 'dynamic';
   const badge = STATUS_LABEL[v.status] ? `<span class="badge ${STATUS_BADGE[v.status]}">${STATUS_LABEL[v.status]}</span>` : '';
-  const kindBadge = plain ? `<span class="badge k">${KN}</span>` : '';
+  const typeBadge = plain ? `<span class="badge k">${KN}</span>` : '';
   const coverSrc = v.cover || (dyn && (v.text_pics||[])[0]) || '';
   const cover = coverHTML(coverSrc, KN[0]);
   const cmts = (v.comments||[]);
@@ -642,7 +642,7 @@ function selectVideo(key, opts){
   $('detail').innerHTML = `
     <div class="detail-cover">${cover}</div>
     <div class="detail-main">
-      <h1>${esc(title)} ${kindBadge} ${badge}</h1>
+      <h1>${esc(title)} ${typeBadge} ${badge}</h1>
       <div class="detail-sub">${sub.join('')}</div>
       ${body}
     </div>
