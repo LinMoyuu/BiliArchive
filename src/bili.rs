@@ -6,6 +6,23 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+#[derive(Debug, PartialEq)]
+pub struct LoginProfile {
+    pub logged_in: bool,
+    pub name: String,
+    pub uid: u64,
+    pub avatar: String,
+}
+fn login_profile(v: &Value) -> LoginProfile {
+    let data = &v["data"];
+    LoginProfile {
+        logged_in: data["isLogin"].as_bool().unwrap_or(false),
+        name: data["uname"].as_str().unwrap_or("").to_owned(),
+        uid: data["mid"].as_u64().unwrap_or(0),
+        avatar: data["face"].as_str().unwrap_or("").to_owned(),
+    }
+}
+
 pub const UA: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) \
 Chrome/131.0.0.0 Safari/537.36";
@@ -236,15 +253,12 @@ impl Bili {
     }
 
     /// 判断 Cookie 是否处于登录状态
-    pub fn login_state(&self) -> Result<(bool, String, u64)> {
+    pub fn login_state(&self) -> Result<LoginProfile> {
         let v = self.get(
             "https://api.bilibili.com/x/web-interface/nav",
             "https://www.bilibili.com/",
         )?;
-        let is_login = v["data"]["isLogin"].as_bool().unwrap_or(false);
-        let uname = v["data"]["uname"].as_str().unwrap_or("").to_string();
-        let mid = v["data"]["mid"].as_u64().unwrap_or(0);
-        Ok((is_login, uname, mid))
+        Ok(login_profile(&v))
     }
 
     fn sign(&self, params: &[(String, String)]) -> Result<String> {
@@ -903,6 +917,7 @@ fn parse_comment(v: &Value, up_mid: u64) -> Option<Comment> {
         return None;
     }
     Some(Comment {
+        raw: v.clone(),
         rpid,
         mid,
         uname: v["member"]["uname"].as_str().unwrap_or("").to_string(),
@@ -938,6 +953,7 @@ fn parse_reply(v: &Value, up_mid: u64) -> Option<Reply> {
         return None;
     }
     Some(Reply {
+        raw: v.clone(),
         rpid,
         mid,
         uname: v["member"]["uname"].as_str().unwrap_or("").to_string(),
@@ -963,6 +979,8 @@ fn parse_reply(v: &Value, up_mid: u64) -> Option<Reply> {
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct CommentRow {
+    #[serde(default)]
+    pub raw: Value,
     pub rpid: u64,
     /// 评论所属内容类型：1 视频 / 11 动态 / 17 转发动态 / 12 专栏
     pub ty: u32,
@@ -1005,7 +1023,8 @@ impl Bili {
             &url,
             "https://member.bilibili.com/platform/inter-active/comment/article",
         )?;
-        let total = v["data"]["page"]["total"].as_u64().unwrap_or(0);
+        let total_value=&v["data"]["page"]["total"];
+        let total=total_value.as_u64().or_else(||total_value.as_str().and_then(|n|n.parse().ok())).ok_or_else(||anyhow!("类型总数响应缺少有效 total"))?;
         let empty = Vec::new();
         let list = v["data"]["list"].as_array().unwrap_or(&empty);
         // 我们以 type=ty 分类请求，每行的内容类型就是 ty 本身。
@@ -1063,6 +1082,7 @@ fn parse_row(v: &Value, ty: u32) -> Option<CommentRow> {
         return None;
     }
     Some(CommentRow {
+        raw: v.clone(),
         rpid,
         ty,
         oid: num(&v["oid"]),
@@ -1098,6 +1118,7 @@ pub fn https_cover(url: &str) -> String {
 
 fn row_to_comment(row: &CommentRow, self_mid: u64) -> Comment {
     Comment {
+        raw: row.raw.clone(),
         rpid: row.rpid,
         mid: row.mid,
         uname: row.uname.clone(),
@@ -1119,6 +1140,7 @@ fn row_to_comment(row: &CommentRow, self_mid: u64) -> Comment {
 
 fn row_to_reply(row: &CommentRow, self_mid: u64) -> Reply {
     Reply {
+        raw: row.raw.clone(),
         rpid: row.rpid,
         mid: row.mid,
         uname: row.uname.clone(),
@@ -1154,7 +1176,7 @@ pub struct DynamicInfo {
     /// 与评论行里的 oid 一致
     pub comment_id: u64,
     pub dynamic_id: u64,
-    pub kind: String,
+    pub r#type: String,
     pub title: String,
     pub text: String,
     pub pics: Vec<String>,
@@ -1333,7 +1355,7 @@ fn parse_dynamic(item: &Value) -> Option<DynamicInfo> {
         comment_type,
         comment_id,
         dynamic_id: vstr(&item["id_str"]).parse().unwrap_or(0),
-        kind: vstr(&item["type"]),
+        r#type: vstr(&item["type"]),
         title: vstr(&opus["title"]),
         text,
         pics,
@@ -1407,13 +1429,13 @@ pub fn rows_to_videos(
 
 fn new_video(row: &CommentRow, self_mid: u64, self_name: &str) -> Video {
     // type 11 / 17 是动态（图文 / 转发），12 专栏，14 音频，其余按视频处理
-    let kind = match row.ty {
+    let content_type = match row.ty {
         11 | 17 => "dynamic",
         12 => "article",
         14 => "audio",
         _ => "video",
     };
-    let url = match kind {
+    let url = match content_type {
         // 真正的 opus 地址要拿到 dynamic_id 才能拼，后面补动态信息时再填
         "dynamic" => String::new(),
         "article" => format!("https://www.bilibili.com/read/cv{}", row.oid),
@@ -1428,7 +1450,7 @@ fn new_video(row: &CommentRow, self_mid: u64, self_name: &str) -> Video {
         owner_name: self_name.to_string(),
         url,
         cover: row.cover.clone(),
-        kind: kind.to_string(),
+        r#type: content_type.to_string(),
         comment_type: row.ty.max(1),
         publish_time: 0,
         publish_time_text: String::new(),
@@ -1553,8 +1575,8 @@ pub fn merge_video_meta(videos: &mut [Video], map: &HashMap<u64, ArchiveMeta>) {
         // 动态/专栏/音频不在视频稿件列表里，不能用视频稿件的信息覆盖它们：
         // 否则会被误标「已删除」、URL 被改成 av 地址、标题被套成 av 号。
         // 它们的状态/标题/原文/URL 由后面的动态原文那一步专门填充。
-        // 注意空 kind 是老数据的「视频」，也要照常合并。
-        if !v.kind.is_empty() && v.kind != "video" {
+        // 注意空 content_type 是老数据的「视频」，也要照常合并。
+        if !v.r#type.is_empty() && v.r#type != "video" {
             continue;
         }
         match map.get(&v.aid) {
@@ -1601,6 +1623,20 @@ pub fn merge_video_meta(videos: &mut [Video], map: &HashMap<u64, ArchiveMeta>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nav_profile_preserves_identity_and_optional_avatar() {
+        let profile = login_profile(&serde_json::json!({"data": {
+            "isLogin": true, "uname": "测试用户", "mid": 123,
+            "face": "https://i0.hdslb.com/face.jpg"
+        }}));
+        assert!(profile.logged_in); assert_eq!(profile.uid,123);
+        assert_eq!(profile.name,"测试用户"); assert_eq!(profile.avatar,"https://i0.hdslb.com/face.jpg");
+        let without_avatar = login_profile(&serde_json::json!({"data":{"isLogin":true,"mid":123}}));
+        assert!(without_avatar.logged_in); assert_eq!(without_avatar.avatar,"");
+        let expired = login_profile(&serde_json::json!({"data":{"isLogin":false}}));
+        assert!(!expired.logged_in); assert_eq!(expired.uid,0);
+    }
 
     fn row(rpid: u64, oid: u64, root: u64, title: &str, cover: &str) -> CommentRow {
         CommentRow {
@@ -1778,6 +1814,34 @@ mod tests {
 }
 
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RetryReason { Risk, Network, Paging }
+impl RetryReason {
+    pub fn wait_seconds(self)->u64 {match self {Self::Paging=>0,_=>RISK_WAIT_SECONDS}}
+    pub fn label(self)->&'static str { match self {Self::Risk=>"风控等待",Self::Network=>"网络异常重试",Self::Paging=>"分页异常重试"} }
+    pub fn key(self)->&'static str { match self {Self::Risk=>"risk",Self::Network=>"network",Self::Paging=>"paging"} }
+}
+pub fn retry_reason(error:&anyhow::Error)->Option<RetryReason> {
+    let message=format!("{error:#}").to_lowercase();
+    if message.contains("-101") || message.contains("账号已变更") || message.contains("账号已改变") {return None;}
+    if message.contains("-352") || message.contains("-412") || message.contains("-509") || message.contains("http 412") || message.contains("http 429") {Some(RetryReason::Risk)}
+    else if message.contains("超时") || message.contains("timed out") || message.contains("timeout") {Some(RetryReason::Network)} else {None}
+}
+pub fn wait_for_retry(cancel:&AtomicBool,on_tick:&mut dyn FnMut(u64),sleep:&mut dyn FnMut(Duration))->Result<()> {
+    wait_for_retry_seconds(RISK_WAIT_SECONDS,cancel,on_tick,sleep)
+}
+
+pub fn wait_for_retry_seconds(seconds:u64,cancel:&AtomicBool,on_tick:&mut dyn FnMut(u64),sleep:&mut dyn FnMut(Duration))->Result<()> {
+    on_tick(seconds);
+    for step in 1..=seconds*4 {
+        if cancel.load(Ordering::SeqCst) {bail!("已取消");}
+        sleep(Duration::from_millis(250));
+        if cancel.load(Ordering::SeqCst) {bail!("已取消");}
+        if step%4==0 {on_tick(seconds-step/4);}
+    }
+    if cancel.load(Ordering::SeqCst) {bail!("已取消");} Ok(())
+}
+
 const RISK_WAIT_SECONDS: u64 = 60;
 
 fn retry_with_risk_wait<T>(
@@ -1792,21 +1856,11 @@ fn retry_with_risk_wait<T>(
         match request() {
             Ok(value) => return Ok(value),
             Err(error) => {
-                let message=error.to_string();
-                let retryable=message.contains("-352") || message.contains("-412") || message.contains("-509")
-                    || message.contains("超时") || message.contains("timed out");
-                if !retryable { return Err(error); }
+                if retry_reason(&error).is_none() { return Err(error); }
             }
         }
         on_wait(RISK_WAIT_SECONDS);
-        on_tick(RISK_WAIT_SECONDS);
-        // Zero means checking, never successful recovery. The caller closes its
-        // dialog only after the original request returns successfully.
-        for step in 1..=RISK_WAIT_SECONDS * 4 {
-            if cancel.load(Ordering::SeqCst) { return Err(anyhow!("已取消")); }
-            sleep(Duration::from_millis(250));
-            if step % 4 == 0 { on_tick(RISK_WAIT_SECONDS - step / 4); }
-        }
+        wait_for_retry(cancel,on_tick,sleep)?;
     }
 }
 
@@ -1835,5 +1889,16 @@ mod risk_wait_tests {
         let mut waits=0;let cancel=AtomicBool::new(false);
         assert!(retry_with_risk_wait::<()>(||Err(anyhow!("invalid request")),&cancel,&mut |_|waits+=1,&mut |_|{},&mut |_|{}).is_err());
         assert_eq!(waits,0);
+    }
+}
+
+impl Bili {
+    pub fn message_request_once(&self,url:&str)->Result<Value> { self.get_api(url,"https://message.bilibili.com/") }
+    pub fn message_get(&self, url: &str, cancel: &AtomicBool,
+        on_wait: &mut dyn FnMut(u64), on_tick: &mut dyn FnMut(u64)) -> Result<Value> {
+        retry_with_risk_wait(|| self.get_api(url,"https://message.bilibili.com/").map_err(|e| {
+            let text=e.to_string();if text.contains("HTTP 412") || text.contains("HTTP 429") {anyhow!("消息接口风控 -412：{}",text)}else{e}
+        }),
+            cancel,on_wait,on_tick,&mut |d|std::thread::sleep(d))
     }
 }

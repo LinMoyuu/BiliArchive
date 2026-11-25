@@ -1,15 +1,40 @@
-import { ScrollView, ListView, TextEdit } from "std-widgets.slint";
+import { ScrollView, ListView } from "std-widgets.slint";
 
 export global Theme {
-    out property <color> bg: #F2F3F8;
+    // Shared application typography uses logical pixels (Windows DPI scales it).
+    out property <length> font-title: 16px;
+    out property <length> font-section: 13px;
+    out property <length> font-body: 12px;
+    out property <length> font-hint: 11px;
+    out property <length> font-stat: 18px;
+    out property <length> font-account: 14px;
+    out property <length> font-icon: 18px;
+    out property <length> range-row-height: 76px;
+    out property <length> range-row-gap: 8px;
+    // Shared workspace geometry; keep both mounted workspaces on the same grid.
+    out property <length> workspace-padding-x: 16px;
+    out property <length> workspace-padding-y: 14px;
+    out property <length> workspace-gap: 14px;
+    out property <length> sidebar-width: 372px;
+    out property <length> panel-radius: 14px;
+    out property <length> panel-padding: 14px;
+    out property <length> panel-title-height: 20px;
+    out property <length> panel-shadow-blur: 14px;
+    out property <length> panel-shadow-offset: 2px;
+    out property <length> actions-height: 123px;
+    out property <length> actions-bottom-padding: 6px;
+    out property <length> actions-stats-gap: 8px;
+    out property <length> stats-height: 101px;
+    out property <length> log-min-height: 180px;
+    out property <color> bg: #F5F6FA;
     out property <color> card: #FFFFFF;
-    out property <color> border: #E5E8F0;
-    out property <color> text: #191C25;
-    out property <color> muted: #757C8F;
-    out property <color> faint: #A2A8B7;
+    out property <color> border: #E8EBF2;
+    out property <color> text: #1C2230;
+    out property <color> muted: #6A7285;
+    out property <color> faint: #9AA1B2;
     out property <color> accent: #FB7299;
-    out property <color> accent-dark: #E85C86;
-    out property <color> accent-soft: #FFF0F5;
+    out property <color> accent-dark: #E45C83;
+    out property <color> accent-soft: #FFF1F5;
     out property <color> blue: #00A1D6;
     out property <color> ok: #17A673;
     out property <color> warn: #E2663B;
@@ -24,6 +49,73 @@ export struct VideoRow {
     checked: bool,
 }
 
+// Shared scrollbars are siblings of the scrollable content, never part of it.
+component HubScrollBar inherits Rectangle {
+    in property <bool> horizontal: false;
+    in property <length> extent;
+    in property <length> page;
+    in-out property <length> offset;
+    private property <length> track: root.horizontal ? root.width : root.height;
+    private property <length> maximum: max(0px, extent - page);
+    private property <length> thumb-size: min(track, max(24px, track * page / max(1px, extent)));
+    private property <length> travel: max(0px, track - thumb-size);
+    private property <length> position: maximum > 0px ? travel * min(maximum, max(0px, -offset)) / maximum : 0px;
+    private property <length> drag-origin;
+    private property <length> drag-offset;
+    private property <length> drag-maximum;
+    visible: maximum > 0px;
+    background: transparent;
+    Rectangle {
+        x: root.horizontal ? root.position : 3px;
+        y: root.horizontal ? 3px : root.position;
+        width: root.horizontal ? root.thumb-size : 4px;
+        height: root.horizontal ? 4px : root.thumb-size;
+        border-radius: 3px;
+        background: touch.pressed ? #AEB8C9 : touch.has-hover ? #C8CFDB : #DCE1EA;
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                root.drag-origin = root.horizontal ? self.mouse-x : self.mouse-y;
+                if root.drag-origin < root.position || root.drag-origin > root.position + root.thumb-size {
+                    root.offset = -root.maximum * max(0px, min(root.travel, root.drag-origin - root.thumb-size / 2)) / max(1px, root.travel);
+                }
+                root.drag-offset = root.offset; root.drag-maximum = root.maximum;
+            }
+        }
+        moved => {
+            if self.pressed {
+                if root.drag-maximum != root.maximum { root.drag-origin = root.horizontal ? self.mouse-x : self.mouse-y; root.drag-offset = root.offset; root.drag-maximum = root.maximum; }
+                root.offset = min(0px, max(-root.maximum, root.drag-offset - ((root.horizontal ? self.mouse-x : self.mouse-y) - root.drag-origin) * root.maximum / max(1px, root.travel)));
+            }
+        }
+        scroll-event(event) => { root.offset = min(0px, max(-root.maximum, root.offset + (root.horizontal ? event.delta-x : event.delta-y))); return accept; }
+    }
+}
+
+component HubScrollView inherits Rectangle {
+    in-out property <length> content-width <=> view.content-width;
+    in-out property <length> content-height <=> view.content-height;
+    in-out property <length> content-x <=> view.content-x;
+    in-out property <length> content-y <=> view.content-y;
+    out property <length> visible-width: view.visible-width;
+    out property <length> visible-height: view.visible-height;
+    background: transparent;
+    view := ScrollView {
+        width: parent.width - 10px;
+        height: parent.height;
+        vertical-scrollbar-policy: always-off; horizontal-scrollbar-policy: always-off;
+        @children
+    }
+    HubScrollBar { x: parent.width - 10px; width: 10px; height: view.height; extent: root.content-height; page: view.height; offset <=> root.content-y; }
+    HubScrollBar { y: parent.height - 10px; height: 10px; width: view.width; horizontal: true; extent: root.content-width; page: view.width; offset <=> root.content-x; }
+}
+
+
+
+
+
 component CheckBox inherits Rectangle {
     in-out property <bool> checked: false;
     width: 18px;
@@ -36,7 +128,7 @@ component CheckBox inherits Rectangle {
     Text {
         text: "✓";
         color: white;
-        font-size: 12px;
+        font-size: Theme.font-body;
         font-weight: 700;
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -47,30 +139,40 @@ component CheckBox inherits Rectangle {
 component Btn inherits Rectangle {
     in property <string> text;
     in property <bool> primary: false;
+    in property <bool> selected: false;
+    in property <int> triangle: 0;
     in property <bool> enabled: true;
     in property <bool> small: false;
     callback clicked();
 
-    height: small ? 30px : 36px;
+    height: small ? 26px : 32px;
+    forward-focus: button-focus;
+    accessible-role: button; accessible-label: root.text; accessible-enabled: root.enabled;
     border-radius: 9px;
-    border-width: primary ? 0px : 1px;
-    border-color: #E1E5EE;
-    background: !enabled ? #EEF0F5 : (primary ? (t.has-hover ? #FF86A9 : Theme.accent) : (t.has-hover ? #F4F6FB : #FFFFFF));
+    border-width: button-focus.has-focus ? 2px : 1px;
+    border-color: button-focus.has-focus ? #F7C3D3 : (primary ? Theme.accent : root.selected ? #FBD0DD : Theme.border);
+    background: !enabled ? #EEF0F5 : (primary ? (t.pressed ? #D75178 : t.has-hover ? Theme.accent-dark : Theme.accent) : (root.selected ? Theme.accent-soft : t.pressed ? #EEF0F6 : t.has-hover ? #FBFCFE : #FFFFFF));
     animate background { duration: 90ms; }
 
+    button-focus := FocusScope { enabled: root.enabled; key-pressed(event) => { if event.text == Key.Return || event.text == Key.Space { root.clicked(); return accept; } return reject; } }
     t := TouchArea {
+        enabled: root.enabled;
         mouse-cursor: pointer;
         clicked => { if (root.enabled) { root.clicked(); } }
     }
 
     Text {
+        width: parent.width; height: parent.height;
         text: root.text;
-        color: !enabled ? #AEB4C2 : (primary ? white : #2B303D);
-        font-size: small ? 11.5px : 12.5px;
+        visible: root.triangle == 0;
+        color: !enabled ? #AEB4C2 : (primary ? white : root.selected ? Theme.accent-dark : Theme.muted);
+        font-size: Theme.font-body;
         font-weight: 600;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
+    Path { visible: root.triangle != 0; x: (parent.width - 7px) / 2; y: (parent.height - 9px) / 2; width: 7px; height: 9px; viewbox-width: 7; viewbox-height: 9; fill: root.enabled ? Theme.muted : Theme.faint; commands: root.triangle < 0 ? "M7 0 L0 4.5 L7 9 Z" : "M0 0 L7 4.5 L0 9 Z"; }
+
 }
 
 component Toggle inherits Rectangle {
@@ -78,25 +180,139 @@ component Toggle inherits Rectangle {
     in-out property <bool> checked: false;
     callback toggled();
     width: 38px;
-    height: 21px;
-    border-radius: 11px;
-    background: checked ? Theme.accent : #D9DDE7;
-    animate background { duration: 120ms; }
+    min-height: 21px;
+    vertical-stretch: 1;
+    forward-focus: toggle-focus;
+    toggle-focus := FocusScope { enabled: root.enabled; key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.checked = !root.checked; root.toggled(); return accept; } return reject; } }
 
     Rectangle {
-        width: 17px;
-        height: 17px;
-        border-radius: 9px;
-        y: 2px;
-        x: root.checked ? 19px : 2px;
-        background: white;
-        animate x { duration: 120ms; }
-    }
+        width: parent.width; height: 21px;
+        y: (parent.height - self.height) / 2;
+        border-radius: 11px;
+        background: checked ? Theme.accent : #D9DDE7;
+        animate background { duration: 120ms; }
 
-    TouchArea {
-        mouse-cursor: pointer;
-        clicked => {
-            if(root.enabled) { root.checked = !root.checked; root.toggled(); }
+        Rectangle {
+            width: 17px;
+            height: 17px;
+            border-radius: 9px;
+            y: 2px;
+            x: root.checked ? 19px : 2px;
+            background: white;
+            animate x { duration: 120ms; }
+        }
+
+        border-width: toggle-focus.has-focus ? 2px : 0px; border-color: #F7C3D3;
+        TouchArea {
+            enabled: root.enabled;
+            mouse-cursor: pointer;
+            clicked => {
+                if(root.enabled) { root.checked = !root.checked; root.toggled(); }
+            }
+        }
+    }
+}
+
+component TextAction inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    callback clicked();
+    forward-focus: focus;
+    width: label.preferred-width + 8px; height: 24px; border-radius: 6px;
+    background: root.enabled && hit.has-hover ? Theme.accent-soft : transparent;
+    label := Text { text: root.text; color: root.enabled ? Theme.accent-dark : Theme.faint; font-size: Theme.font-body; width: parent.width; height: parent.height; horizontal-alignment: center; vertical-alignment: center; }
+    focus := FocusScope { enabled: root.enabled; key-pressed(event) => { if event.text == Key.Return || event.text == Key.Space { root.clicked(); return accept; } return reject; } }
+    hit := TouchArea { enabled: root.enabled; mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+component HubYearBox inherits Btn {
+    in property <int> value;
+    callback edited(int);
+
+    text: root.value + " 年";
+    clicked => { years.show(); }
+    years := PopupWindow {
+        x: 0px; y: root.height + 4px; width: root.width; height: 228px;
+        close-policy: close-on-click-outside; forward-focus: year-focus;
+        year-focus := FocusScope {
+            property <int> highlighted: root.value;
+            init => { self.highlight(root.value); }
+            function highlight(value: int) {
+                self.highlighted = min(9999, max(1970, value));
+                list.viewport-y = -min((8030 * 28px) - list.height, max(0px, (self.highlighted - 1970) * 28px - 84px));
+            }
+            key-pressed(event) => {
+                if event.text == Key.Escape { years.close(); return accept; }
+                if event.text == Key.UpArrow || event.text == Key.DownArrow {
+                    self.highlight(self.highlighted + (event.text == Key.UpArrow ? -1 : 1));
+                    return accept;
+                }
+                if event.text == Key.PageUp || event.text == Key.PageDown {
+                    self.highlight(self.highlighted + (event.text == Key.PageUp ? -8 : 8));
+                    return accept;
+                }
+                if event.text == Key.Return || event.text == Key.Space {
+                    let selected = self.highlighted;
+                    years.close();
+                    root.edited(selected);
+                    return accept;
+                }
+                return reject;
+            }
+            Rectangle {
+                width: parent.width; height: parent.height; background: Theme.card;
+                border-radius: 9px; border-width: 1px; border-color: Theme.border;
+                list := ListView {
+                    x: 4px; y: 2px; width: parent.width - 8px; height: parent.height - 4px;
+                    horizontal-scrollbar-policy: always-off;
+                    for row in 8030 : Rectangle {
+                        height: 28px;
+                        Btn {
+                            width: parent.width; y: 1px; small: true;
+                            text: (1970 + row) + " 年"; selected: year-focus.highlighted == 1970 + row;
+                            clicked => { years.close(); root.edited(1970 + row); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+component HubMonthBox inherits Rectangle {
+    in property <[string]> model;
+    in-out property <int> current-index: 0;
+    callback selected(string);
+    private property <int> popup-index: root.current-index;
+    height: 32px; background: Theme.card; border-radius: 9px; border-width: 1px; border-color: focus.has-focus ? #F7C3D3 : Theme.border;
+    forward-focus: focus;
+    Text { x: 10px; width: parent.width - 32px; height: parent.height; text: root.model[root.current-index]; font-size: Theme.font-body; color: Theme.text; vertical-alignment: center; }
+    Path { x: parent.width - 19px; y: 14px; width: 8px; height: 4px; viewbox-width: 8; viewbox-height: 4; fill: Theme.muted; commands: "M0 0 L8 0 L4 4 Z"; }
+    focus := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Return || event.text == Key.Space { root.popup-index = root.current-index; popup.show(); return accept; }
+            if event.text == Key.UpArrow || event.text == Key.DownArrow { root.current-index = min(root.model.length - 1, max(0, root.current-index + (event.text == Key.UpArrow ? -1 : 1))); root.selected(root.model[root.current-index]); return accept; }
+            return reject;
+        }
+    }
+    TouchArea { mouse-cursor: pointer; clicked => { root.popup-index = root.current-index; popup.show(); } }
+    popup := PopupWindow {
+        x: 0px; y: root.height + 4px; width: 156px; height: 128px;
+        forward-focus: popup-focus;
+        Rectangle { background: Theme.card; border-radius: 9px; border-width: 1px; border-color: Theme.border;
+            popup-focus := FocusScope { key-pressed(event) => {
+                if event.text == Key.Escape { popup.close(); return accept; }
+                if event.text == Key.UpArrow || event.text == Key.DownArrow || event.text == Key.LeftArrow || event.text == Key.RightArrow {
+                    root.popup-index = min(root.model.length - 1, max(0, root.popup-index + (event.text == Key.UpArrow ? -3 : event.text == Key.DownArrow ? 3 : event.text == Key.LeftArrow ? -1 : 1))); return accept;
+                }
+                if event.text == Key.Return || event.text == Key.Space { root.current-index = root.popup-index; popup.close(); root.selected(root.model[root.current-index]); return accept; }
+                return reject;
+            } }
+            VerticalLayout { padding: 7px; spacing: 2px;
+                for row in 4: HorizontalLayout { spacing: 2px;
+                    for col in 3: Btn { small: true; text: root.model[row * 3 + col]; selected: root.popup-index == row * 3 + col; clicked => { root.current-index = row * 3 + col; popup.close(); root.selected(root.model[root.current-index]); } }
+                }
+            }
         }
     }
 }
@@ -105,37 +321,48 @@ component CollectionRangeRow inherits Rectangle {
     in property <string> label;
     in property <string> total-text: "未获取";
     in property <bool> busy: false;
-    in-out property <bool> selected: true;
-    in-out property <string> from-text: "1";
+    in property <bool> available: false;
+    in property <bool> retryable: true;
+    callback retry-requested();
+    in-out property <bool> selected: false;
+    in-out property <string> from-text: "";
     in-out property <string> to-text: "";
     callback selection-changed(bool);
     callback all-requested();
     callback bounds-edited();
-    height: 72px;
+    height: Theme.range-row-height;
     background: root.selected ? #FFF8FB : #F6F7FA;
     border-radius: 8px;
     VerticalLayout {
-        padding: 6px; spacing: 5px;
+        padding: 6px; spacing: 6px; alignment: LayoutAlignment.start;
         HorizontalLayout {
-            spacing: 8px;
-            Toggle { checked <=> root.selected; enabled: !root.busy; toggled => { root.selection-changed(root.selected); } }
-            Text { text: root.label; color: root.selected ? Theme.text : Theme.faint; font-size: 10.5px; font-weight: 600; vertical-alignment: center; }
-            Text { text: root.total-text; color: Theme.faint; font-size: 9px; horizontal-stretch: 1; horizontal-alignment: right; vertical-alignment: center; }
+            spacing: 8px; height: 24px;
+            Toggle { checked <=> root.selected; enabled: root.available && !root.busy; toggled => { root.selection-changed(root.selected); } }
+            Text { text: root.label; color: root.selected ? Theme.text : Theme.faint; font-size: Theme.font-body; font-weight: 600; height: 24px; vertical-alignment: center; }
+            Rectangle { horizontal-stretch: 1; height: 24px; background: transparent;
+                Text { overflow: elide; text: root.total-text; color: root.retryable ? Theme.blue : Theme.faint; font-size: Theme.font-hint; width: parent.width; height: parent.height; horizontal-alignment: right; vertical-alignment: center; }
+                TouchArea { enabled: root.retryable && !root.busy; mouse-cursor: pointer; clicked => { root.retry-requested(); } }
+            }
         }
         HorizontalLayout {
             spacing: 5px;
-            Text { text: "起始页"; font-size: 9px; color: Theme.muted; vertical-alignment: center; }
+            Text { width: 36px; height: 28px; text: "起始页"; font-size: Theme.font-body; color: Theme.muted; vertical-alignment: center; }
             Rectangle {
-                width: 43px; height: 24px; background: white; border-radius: 5px; border-width: 1px; border-color: Theme.border;
-                TextInput { x: 2px; width: parent.width - 4px; height: parent.height; text <=> root.from-text; edited => { root.bounds-edited(); } enabled: root.selected && !root.busy; input-type: number; single-line: true; font-size: 10px; horizontal-alignment: center; vertical-alignment: center; }
+                width: 44px; height: 28px; background: white; border-radius: 5px; border-width: 1px; border-color: Theme.border;
+                TextInput { x: 2px; width: parent.width - 4px; height: parent.height; text <=> root.from-text; edited => { root.bounds-edited(); } enabled: root.available && root.selected && !root.busy; input-type: number; single-line: true; font-size: Theme.font-body; horizontal-alignment: center; vertical-alignment: center; }
             }
-            Text { text: "结束页"; font-size: 9px; color: Theme.muted; vertical-alignment: center; }
+            Text { width: 36px; height: 28px; text: "结束页"; font-size: Theme.font-body; color: Theme.muted; vertical-alignment: center; }
             Rectangle {
-                width: 43px; height: 24px; background: white; border-radius: 5px; border-width: 1px; border-color: Theme.border;
-                Text { text: "末页"; visible: root.to-text == ""; color: Theme.faint; font-size: 9px; horizontal-alignment: center; vertical-alignment: center; }
-                TextInput { x: 2px; width: parent.width - 4px; height: parent.height; text <=> root.to-text; edited => { root.bounds-edited(); } enabled: root.selected && !root.busy; input-type: number; single-line: true; font-size: 10px; horizontal-alignment: center; vertical-alignment: center; }
+                width: 44px; height: 28px; background: white; border-radius: 5px; border-width: 1px; border-color: Theme.border;
+                Text { text: "末页"; visible: root.to-text == ""; color: Theme.faint; font-size: Theme.font-body; horizontal-alignment: center; vertical-alignment: center; }
+                TextInput { x: 2px; width: parent.width - 4px; height: parent.height; text <=> root.to-text; edited => { root.bounds-edited(); } enabled: root.available && root.selected && !root.busy; input-type: number; single-line: true; font-size: Theme.font-body; horizontal-alignment: center; vertical-alignment: center; }
             }
-            Btn { text: "全部"; width: 44px; small: true; enabled: root.selected && !root.busy; clicked => { root.all-requested(); } }
+            Rectangle {
+                width: 44px; height: 28px; border-radius: 5px; border-width: 1px; border-color: Theme.border;
+                background: root.available && root.selected && !root.busy ? (all-hit.has-hover ? Theme.accent-soft : white) : Theme.field;
+                Text { text: "全部"; font-size: Theme.font-body; color: root.available && root.selected && !root.busy ? Theme.accent-dark : Theme.faint; horizontal-alignment: center; vertical-alignment: center; }
+                all-hit := TouchArea { enabled: root.available && root.selected && !root.busy; mouse-cursor: pointer; clicked => { root.all-requested(); } }
+            }
             Rectangle { horizontal-stretch: 1; background: transparent; }
         }
     }
@@ -145,20 +372,468 @@ component SectionTitle inherits Text {
     in property <string> label;
     text: label;
     color: Theme.text;
-    font-size: 12.5px;
+    font-size: Theme.font-section;
     font-weight: 700;
     vertical-alignment: center;
 }
 
+component SectionHeader inherits Rectangle {
+    in property <string> label;
+    in property <bool> expand-title: false;
+    in property <color> title-color: Theme.text;
+    out property <length> title-left: heading.x;
+    out property <length> title-top: heading.y;
+    out property <length> title-height: heading.height;
+    height: Theme.panel-title-height;
+    HorizontalLayout {
+        spacing: 6px;
+        heading := SectionTitle { label: root.label; color: root.title-color; horizontal-stretch: root.expand-title ? 1 : 0; }
+        @children
+    }
+}
+
+export struct MessageCalendarDate { year: int, month: int, day: int }
+
+
+export struct MessageCalendarCell { day: int, selected: bool, today: bool }
+component MessageDateField inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    in property <bool> invalid: false;
+    in property <bool> active: true;
+    in property <int> reset-token;
+    in property <int> calendar-year;
+    in property <int> calendar-month;
+    in property <MessageCalendarDate> calendar-date;
+    in property <[MessageCalendarCell]> days;
+    callback calendar-requested();
+    callback month-shift(int);
+    callback month-selected(int, int);
+    callback day-selected(int);
+    callback calendar-accepted() -> bool;
+    callback cleared();
+    changed reset-token => { dropdown.close(); }
+    changed active => { if !root.active { dropdown.close(); } }
+    changed enabled => { if !root.enabled { dropdown.close(); } }
+
+    min-width: 126px; height: 34px; background: Theme.field; border-radius: 9px; border-width: 1px;
+    border-color: root.invalid ? Theme.warn : (picker-focus.has-focus || dropdown.is-open ? #F7C3D3 : Theme.border);
+    accessible-role: button; accessible-label: root.text == "" ? "不限，选择日期" : root.text;
+    forward-focus: picker-focus;
+
+    function open-calendar() {
+        if root.enabled && root.active && !dropdown.is-open {
+            root.calendar-requested();
+            picker-focus.focus();
+            dropdown.show();
+        }
+    }
+
+    picker-focus := FocusScope {
+        enabled: root.enabled && root.active;
+        key-pressed(event) => {
+            if event.text == Key.Return || event.text == Key.Space || event.text == Key.DownArrow {
+                root.open-calendar();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    Text {
+        x: 8px; width: parent.width - 32px; height: parent.height;
+        text: root.text == "" ? "不限" : root.text;
+        color: root.text == "" ? Theme.faint : Theme.text;
+        font-size: Theme.font-body; vertical-alignment: center;
+    }
+    Path {
+        x: parent.width - 16px; y: (parent.height - 5px) / 2; width: 8px; height: 5px;
+        viewbox-width: 8; viewbox-height: 5; fill: root.enabled ? Theme.blue : Theme.faint;
+        commands: "M0 0 L8 0 L4 5 Z";
+    }
+    TouchArea {
+        enabled: root.enabled && root.active;
+        mouse-cursor: pointer;
+        clicked => { root.open-calendar(); }
+    }
+
+    dropdown := PopupWindow {
+        x: 0px; y: root.height + 4px; width: 340px; height: 294px;
+        close-policy: close-on-click-outside; forward-focus: calendar-focus;
+        calendar-focus := FocusScope {
+            width: parent.width; height: parent.height;
+            property <int> tracked-month: root.calendar-month;
+            changed tracked-month => { months.current-index = root.calendar-month - 1; }
+            key-pressed(event) => {
+                if event.text == Key.Escape { dropdown.close(); return accept; }
+                if event.text == Key.Return && self.has-focus {
+                    if root.calendar-accepted() { dropdown.close(); }
+                    return accept;
+                }
+                return reject;
+            }
+            Rectangle {
+                width: parent.width; height: parent.height; background: white; border-radius: 8px; border-width: 1px; border-color: Theme.border;
+                HorizontalLayout {
+                    x: 10px; y: 10px; width: 320px; height: 32px; spacing: 6px;
+                    Btn { text: "上个月"; triangle: -1; width: 32px; clicked => { root.month-shift(-1); } }
+                    HubYearBox { value: root.calendar-year; width: 136px; edited(value) => { root.month-selected(value, root.calendar-month); } }
+                    months := HubMonthBox { width: 102px; model: ["1月","2月","3月","4月","5月","6月","7月","8月","9月","10月","11月","12月"]; current-index: root.calendar-month - 1; selected(value) => { root.month-selected(root.calendar-year, months.current-index + 1); } }
+                    Btn { text: "下个月"; triangle: 1; width: 32px; clicked => { root.month-shift(1); } }
+                }
+                Rectangle {
+                    x: 10px; y: 46px; width: 320px; height: 20px; background: transparent;
+                    for name[i] in ["一","二","三","四","五","六","日"] : Text { x: i * (320px / 7); width: 320px / 7; height: 20px; text: name; color: Theme.muted; horizontal-alignment: center; vertical-alignment: center; }
+                }
+                Rectangle {
+                    x: 10px; y: 68px; width: 320px; height: 168px; background: transparent;
+                    for cell[i] in root.days : Rectangle {
+                        property <bool> picked: cell.day > 0 && cell.day == root.calendar-date.day
+                            && root.calendar-year == root.calendar-date.year
+                            && root.calendar-month == root.calendar-date.month;
+                        x: mod(i,7) * (320px / 7); y: floor(i / 7) * 28px; width: 320px / 7; height: 28px;
+                        Rectangle {
+                            x: 2px; y: 1px; width: parent.width - 4px; height: parent.height - 2px;
+                            border-radius: 5px; background: parent.picked ? Theme.accent-dark : day-hit.has-hover ? Theme.accent-soft : transparent;
+                            border-width: cell.today ? 1px : 0px; border-color: Theme.blue;
+                        }
+                        Text { text: cell.day > 0 ? cell.day : ""; color: parent.picked ? white : Theme.text; width: parent.width; height: parent.height; horizontal-alignment: center; vertical-alignment: center; }
+                        day-hit := TouchArea {
+                            x: 0px; y: 0px; width: parent.width; height: parent.height;
+                            enabled: cell.day > 0; mouse-cursor: pointer;
+                            clicked => { root.day-selected(cell.day); }
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    x: 10px; y: 254px; width: 320px; height: 30px; spacing: 6px;
+                    Btn { text: "清空"; width: 72px; small: true; clicked => { root.cleared(); dropdown.close(); } }
+                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                    Btn { text: "取消"; width: 72px; small: true; clicked => { dropdown.close(); } }
+                    Btn { text: "确定"; width: 72px; small: true; primary: true; clicked => { if root.calendar-accepted() { dropdown.close(); } } }
+                }
+            }
+        }
+    }
+}
+
+
+
+component DownChevron inherits Path {
+    width: 10px; height: 6px;
+    viewbox-width: 10; viewbox-height: 6;
+    stroke: Theme.muted; stroke-width: 1.5px; fill: transparent;
+    commands: "M 1 1 L 5 5 L 9 1";
+}
+
+export struct OfflineAccountRow {key:string,label:string}
+
+component AccountEntry inherits Rectangle {
+    in property <bool> blocked: false;
+    changed blocked => {if root.blocked {menu.close();}}
+    in property <bool> logged-in;
+    in property <bool> offline;
+    in property <[OfflineAccountRow]> local-accounts;
+    in property <bool> busy;
+    in property <string> name;
+    in property <string> uid;
+    in property <image> avatar;
+    in property <bool> has-avatar;
+    callback login();
+    callback import-file(); callback import-folder(); callback export-library(); callback choose-offline(string);
+    in property <length> available-name-width: 400px;
+    private property <string> display-name: root.offline ? root.name + " · 本地" : root.logged-in ? root.name : "账号登录";
+    private property <length> label-width: min(name-measure.preferred-width, root.offline ? root.available-name-width : 120px);
+    private property <length> menu-offset: root.offline ? max(0px, account-label.preferred-height - 22px) : 0px;
+    width: 36px + root.label-width + 16px;
+    height: root.offline ? max(36px, account-label.preferred-height + 6px) : 36px;
+    name-measure := Text { text: root.display-name; font-size: Theme.font-account; visible: false; }
+    background: transparent;
+    border-width: entry-focus.has-focus ? 1px : 0px; border-color: Theme.blue; border-radius: 4px;
+    forward-focus: entry-focus;
+    changed logged-in => { menu.close(); }
+    function activate() {
+        if root.blocked {return;}
+        if !root.busy {menu.show();}
+    }
+    entry-focus := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Return || event.text == Key.Space || event.text == Key.DownArrow { root.activate(); return accept; }
+            return reject;
+        }
+        Rectangle {
+            x: 0px; y: (parent.height - self.height) / 2; width: 30px; height: 30px; border-radius: 15px; clip: true; background: Theme.accent-soft;
+            Rectangle { x: 10px; y: 5px; width: 10px; height: 10px; border-radius: 5px; background: Theme.accent; }
+            Rectangle { x: 6px; y: 17px; width: 18px; height: 13px; border-radius: 8px; background: Theme.accent; }
+            Image { width: parent.width; height: parent.height; source: @image-url("../assets/noface.jpg"); image-fit: cover; }
+            Image { width: parent.width; height: parent.height; source: root.avatar; image-fit: cover; visible: root.has-avatar; }
+        }
+        account-label := Text {
+            x: 36px; width: root.label-width; height: parent.height;
+            text: root.display-name;
+            wrap: root.offline ? TextWrap.char-wrap : TextWrap.no-wrap;
+            overflow: root.offline ? TextOverflow.clip : TextOverflow.elide;
+            color: Theme.text; font-size: Theme.font-account; vertical-alignment: center;
+        }
+        DownChevron { x: account-label.x + account-label.width + 6px; y: (parent.height - self.height)/2; }
+        hit := TouchArea { mouse-cursor: pointer; clicked => { root.activate(); } }
+    }
+    menu := PopupWindow {
+        x: root.width - self.width; y: root.height + 6px; width: root.offline ? max(280px, root.width) : 280px; height: 242px + root.menu-offset + max(1,min(4,root.local-accounts.length)) * 30px;
+        close-policy: close-on-click-outside; forward-focus: menu-focus;
+        menu-focus := FocusScope {
+            key-pressed(event) => {
+                if event.text == Key.Escape { menu.close(); return accept; }
+                if event.text == Key.Tab { menu.close(); return reject; }
+                if (event.text == Key.Return || event.text == Key.Space) && !root.busy { menu.close(); root.login(); return accept; }
+                return reject;
+            }
+            Rectangle {
+                width: parent.width; height: parent.height; border-radius: 10px; background: white; border-width: 1px; border-color: Theme.border;
+                Text { x: 12px; y: 9px; width: parent.width - 24px; height: 22px + root.menu-offset; text: root.offline || root.logged-in ? root.display-name : "选择账号或导入资料"; wrap: root.offline ? TextWrap.char-wrap : TextWrap.no-wrap; overflow: root.offline ? TextOverflow.clip : TextOverflow.elide; font-weight: 600; color: Theme.text; }
+                Text { x: 12px; y: 32px + root.menu-offset; width: parent.width - 24px; height: 20px; text: root.uid != "" ? "UID " + root.uid : "导入后保存在本机，无需重复导入"; font-size: Theme.font-hint; color: Theme.muted; }
+                Btn { x: 10px; y: 64px + root.menu-offset; width: parent.width - 20px; text: root.logged-in ? "切换在线账号" : "扫码登录"; enabled: !root.busy; clicked => {menu.close();root.login();} }
+                Btn { x: 10px; y: 100px + root.menu-offset; width: parent.width - 20px; text: "导入资料包 / JSON"; enabled: !root.busy; clicked => {menu.close();root.import-file();} }
+                Btn { x: 10px; y: 136px + root.menu-offset; width: parent.width - 20px; text: "导入归档目录"; enabled: !root.busy; clicked => {menu.close();root.import-folder();} }
+                Btn { x: 10px; y: 172px + root.menu-offset; width: parent.width - 20px; text: "导出当前账号离线资料包"; enabled: !root.busy && (root.logged-in || root.offline); clicked => {menu.close();root.export-library();} }
+                Text { x: 12px; y: 210px + root.menu-offset; height: 22px; text: root.local-accounts.length > 0 ? "本机离线账号" : "尚无离线资料"; color: Theme.muted; font-size: Theme.font-hint; }
+                HubScrollView { x: 10px; y: 234px + root.menu-offset; width: parent.width - 20px; height: max(1,min(4,root.local-accounts.length))*30px;
+                    content-width: self.visible-width;content-height: root.local-accounts.length*30px;
+                    for entry[index] in root.local-accounts : Btn { y: index*30px;width: parent.width;small: true;text: entry.label;enabled: !root.busy;clicked => {menu.close();root.choose-offline(entry.key);} }
+                }
+            }
+        }
+    }
+}
+
+component WorkspacePicker inherits Rectangle {
+    in property <bool> blocked: false;
+    changed blocked => {if root.blocked {menu.close();}}
+    in property <int> current;
+    callback chosen(int);
+    width: 198px; height: 42px; background: transparent;
+    forward-focus: picker-focus;
+    picker-focus := FocusScope {
+        enabled: !root.blocked;
+        key-pressed(event) => { if event.text == Key.Return || event.text == Key.Space || event.text == Key.DownArrow { menu.show(); return accept; } return reject; }
+        VerticalLayout {
+            spacing: 1px; alignment: center;
+            title-row := HorizontalLayout {
+                spacing: 6px; alignment: LayoutAlignment.start;
+                product-label := Text { width: self.preferred-width; text: root.current == 0 ? "评论聚合台" : "消息归档台"; color: Theme.text; font-size: Theme.font-title; font-weight: 700; }
+                DownChevron { y: (parent.height - self.height)/2; }
+            }
+            Text { text: root.current == 0 ? "稿件评论 · 收集与归档" : "私信与互动通知 · 收集与归档"; color: Theme.faint; font-size: Theme.font-hint; }
+        }
+        TouchArea { enabled: !root.blocked; mouse-cursor: pointer; clicked => { menu.show(); } }
+    }
+    menu := PopupWindow {
+        x: 0px; y: title-row.y + title-row.height + 4px; width: 260px; height: 122px;
+        close-policy: close-on-click-outside; forward-focus: menu-focus;
+        menu-focus := FocusScope {
+            property <int> highlighted: root.current;
+            key-pressed(event) => {
+                if event.text == Key.Escape { menu.close(); return accept; }
+                if event.text == Key.Tab { menu.close(); return reject; }
+                if event.text == Key.UpArrow || event.text == Key.DownArrow { self.highlighted = 1 - self.highlighted; return accept; }
+                if event.text == Key.Return || event.text == Key.Space { root.chosen(self.highlighted); menu.close(); return accept; }
+                return reject;
+            }
+            Rectangle {
+                width: parent.width; height: parent.height; background: white; border-radius: 10px; border-width: 1px; border-color: Theme.border;
+                for value in [0,1] : Rectangle {
+                    x: 5px; y: 5px + value * 56px; width: parent.width - 10px; height: 56px; border-radius: 6px;
+                    background: menu-focus.highlighted == value ? Theme.accent-soft : white;
+                    VerticalLayout { padding-left: 12px; padding-right: 30px; spacing: 2px; alignment: center;
+                        Text { text: value == 0 ? "评论聚合台" : "消息归档台"; color: Theme.text; font-size: Theme.font-section; font-weight: 700; }
+                        Text { text: value == 0 ? "稿件评论" : "私信、粉丝团与互动通知"; color: Theme.muted; font-size: Theme.font-hint; }
+                    }
+                    Text { x: parent.width - 26px; width: 20px; height: parent.height; text: root.current == value ? "✓" : ""; color: Theme.accent-dark; vertical-alignment: center; }
+                    TouchArea { mouse-cursor: pointer; clicked => { root.chosen(value); menu.close(); } }
+                }
+            }
+        }
+    }
+}
+
+component WorkspaceSurface inherits Rectangle {
+    background: Theme.bg;
+    HorizontalLayout {
+        padding-left: Theme.workspace-padding-x;
+        padding-right: Theme.workspace-padding-x;
+        padding-top: Theme.workspace-padding-y;
+        padding-bottom: Theme.workspace-padding-y;
+        spacing: Theme.workspace-gap;
+        @children
+    }
+}
+
+component HubPanel inherits Rectangle {
+    in property <bool> dark: false;
+    background: root.dark ? #171A22 : Theme.card;
+    border-radius: Theme.panel-radius;
+    border-width: 1px;
+    border-color: root.dark ? #23262F : Theme.border;
+    drop-shadow-blur: Theme.panel-shadow-blur;
+    drop-shadow-color: root.dark ? #10182812 : #10182808;
+    drop-shadow-offset-y: Theme.panel-shadow-offset;
+    @children
+}
+
+component TaskControls inherits Rectangle {
+    in property <int> workspace;
+    in property <int> active-task;
+    in property <bool> busy;
+    in property <bool> loading-local;
+    in property <bool> start-enabled: true;
+    in property <string> start-label: "开始采集";
+    callback start(); callback pause(); callback stop();
+    height: 32px;
+    HorizontalLayout {
+        spacing: 8px;
+        if root.loading-local : Text { text: "正在读取本地数据…"; color: Theme.muted; vertical-alignment: center; }
+        if !root.loading-local && (root.active-task == root.workspace || root.active-task == 3) : Btn {
+            text: "暂停"; horizontal-stretch: 1; clicked => {root.pause();}
+        }
+        if !root.loading-local && (root.active-task == root.workspace || root.active-task == 3) : Btn {
+            text: "结束"; primary: true; width: 72px; clicked => {root.stop();}
+        }
+        if !root.loading-local && root.active-task != root.workspace && root.active-task != 3 && (root.busy || root.active-task != 0) : Text {
+            text: root.active-task == 1 ? "评论聚合台正在采集…" : root.active-task == 2 ? "消息归档台正在采集…" : "正在处理，请稍候…";
+            color: Theme.muted; vertical-alignment: center;
+        }
+        if !root.loading-local && !root.busy && root.active-task == 0 : Btn {
+            text: root.start-label; primary: true; horizontal-stretch: 1; enabled: root.start-enabled; clicked => {root.start();}
+        }
+    }
+}
+
+component HubLogPanel inherits HubPanel {
+    in property <string> text;
+    min-height: Theme.log-min-height;
+    vertical-stretch: 1;
+    dark: true;
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 6px;
+
+        SectionHeader {
+            label: "运行日志"; title-color: #E7E9EF;
+            Text { text: "最新在上"; color: #6B7285; font-size: Theme.font-hint; vertical-alignment: center; }
+            Rectangle { horizontal-stretch: 1; background: transparent; }
+        }
+
+        Rectangle {
+            vertical-stretch: 1; clip: true; background: transparent;
+            ContextMenuArea {
+                Menu {
+                    MenuItem { title: "全选"; activated => { log-body.select-all(); } }
+                    MenuItem { title: "复制"; enabled: log-body.has-selection; activated => { log-body.copy(); } }
+                }
+                log-scroll := HubScrollView {
+                    width: parent.width; height: parent.height;
+                    content-width: self.visible-width;
+                    content-height: max(log-body.preferred-height + 8px, self.visible-height);
+                    log-body := TextInput {
+                        read-only: true; single-line: false; vertical-alignment: top;
+                        selection-background-color: #35405A; selection-foreground-color: white;
+                        x: 0px; y: 0px; width: log-scroll.visible-width - 12px;
+                        height: self.preferred-height;
+                        text: root.text; color: #A8B0C2; font-size: Theme.font-hint; wrap: word-wrap;
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+component StatCard inherits Rectangle {
+    in property <string> value;
+    in property <string> label;
+    in property <bool> accent: false;
+    height: 54px;
+    horizontal-stretch: 1;
+    border-radius: 10px;
+    background: root.accent ? Theme.accent-soft : #F8F9FC;
+    border-width: 1px;
+    border-color: root.accent ? #FFE1EB : #EFF1F7;
+    VerticalLayout {
+        alignment: center;
+        Text { text: root.value; color: root.accent ? Theme.accent : Theme.text; font-size: Theme.font-stat; font-weight: 700; horizontal-alignment: center; }
+        Text { text: root.label; color: root.accent ? Theme.accent : Theme.faint; font-size: Theme.font-hint; horizontal-alignment: center; }
+    }
+}
+component StatsPreview inherits HubPanel {
+    height: Theme.stats-height;
+    VerticalLayout {
+        padding: 10px;
+        spacing: 7px;
+        SectionHeader { label: "结果预览"; expand-title: true; }
+        HorizontalLayout { spacing: 8px; @children }
+    }
+}
+
 export component AppWindow inherits Window {
-    title: "评论聚合台 · BiliCommentHub";
+    out property <[length]> comments-text-bounds: [comments-range-header.x + comments-range-header.title-left, comments-range-header.y + comments-range-header.title-top, comments-range-header.title-height, comments-actions-header.x + comments-actions-header.title-left, comments-actions-header.y + comments-actions-header.title-top, comments-actions-header.title-height];
+    out property <[length]> messages-text-bounds: [messages-range-header.x + messages-range-header.title-left, messages-range-header.y + messages-range-header.title-top, messages-range-header.title-height, messages-actions-header.x + messages-actions-header.title-left, messages-actions-header.y + messages-actions-header.title-top, messages-actions-header.title-height];
+    out property <length> comments-action-bottom-gap: comments-actions.height - comments-task-controls.y - comments-task-controls.height;
+    out property <length> messages-action-bottom-gap: messages-actions.height - messages-task-controls.y - messages-task-controls.height;
+    out property <[length]> comments-panel-bounds: [comments-left.x, comments-left.y, comments-left.width, comments-left.height, comments-right.x, comments-right.y, comments-right.width, comments-right.height, comments-range.x, comments-range.y, comments-range.width, comments-range.height, comments-actions.x, comments-actions.y, comments-actions.width, comments-actions.height, comments-stats.x, comments-stats.y, comments-stats.width, comments-stats.height, comments-log.x, comments-log.y, comments-log.width, comments-log.height, comments-range.border-radius, comments-actions.border-radius, comments-stats.border-radius, comments-log.border-radius];
+    out property <[length]> messages-panel-bounds: [messages-left.x, messages-left.y, messages-left.width, messages-left.height, messages-right.x, messages-right.y, messages-right.width, messages-right.height, messages-range.x, messages-range.y, messages-range.width, messages-range.height, messages-actions.x, messages-actions.y, messages-actions.width, messages-actions.height, messages-stats.x, messages-stats.y, messages-stats.width, messages-stats.height, messages-log.x, messages-log.y, messages-log.width, messages-log.height, messages-range.border-radius, messages-actions.border-radius, messages-stats.border-radius, messages-log.border-radius];
+    out property <length> settings-dialog-top;
+    out property <length> settings-dialog-height;
+    in-out property <int> workspace: 0;
+    callback workspace-chosen(int);
+    in-out property <bool> message-private: true;
+    in-out property <bool> message-groups: false;
+    in-out property <bool> message-groups-confirm: false;
+    in-out property <bool> message-likes: true;
+    in-out property <bool> message-replies: true;
+    in-out property <bool> message-mentions: true;
+    in-out property <bool> message-has-resume: false;
+    in-out property <int> active-task: 0;
+    in-out property <bool> message-active: false;
+    in-out property <bool> message-date-auto-end: true;
+    in-out property <string> message-date-error: "";
+    in-out property <int> message-calendar-generation: 0;
+    in-out property <MessageCalendarDate> message-calendar-date: {year: 1970, month: 1, day: 1};
+    private property <bool> message-date-editable: !root.busy && !root.loading-local;
+    pure callback message-date-display(string) -> string;
+    callback message-date-clear(int);
+    callback message-calendar-open(int) -> MessageCalendarDate;
+    callback message-calendar-accept(int, MessageCalendarDate) -> bool;
+    in-out property <int> message-calendar-year: 1970;
+    in-out property <int> message-calendar-month: 1;
+    in-out property <[MessageCalendarCell]> message-calendar-days;
+    callback message-calendar-shift(int);
+    callback message-calendar-month-changed(int,int);
+    callback message-calendar-day-selected(int);
+    in-out property <string> message-from: "";
+    in-out property <string> message-to: "";
+    in-out property <string> message-count-replies: "0";
+    in-out property <string> message-count-mentions: "0";
+    in-out property <string> message-count-likes: "0";
+    in-out property <string> message-count-private: "0";
+    in-out property <string> message-count-groups: "0";
+    callback message-retry-ng();
+    in-out property <int> message-ng-count: 0;
+    callback message-attachments();
+    in-out property <int> message-attachments-pending: 0;
+    in-out property <string> message-attachments-status: "附件 0 已保存 / 0 待处理";
+    callback message-load();
+    callback message-start();
+    callback message-export();
+    callback message-web();
+
+    title: (root.workspace == 0 ? "评论聚合台" : "消息归档台") + " · BiliArchive";
     preferred-width: 1200px;
     preferred-height: 792px;
     min-width: 1040px;
     min-height: 700px;
     background: Theme.bg;
     default-font-family: "Microsoft YaHei UI";
-    default-font-size: 12px;
+    default-font-size: Theme.font-body;
 
     // ---- 状态 ----
     in-out property <string> sessdata: "";
@@ -172,46 +847,77 @@ export component AppWindow inherits Window {
     in-out property <float> progress: 0.0;
     in-out property <string> progress-text: "";
     in-out property <bool> verify-waiting: false;
+    in-out property <string> verify-title: "接口触发风控，正在自动等待";
+    in-out property <string> verify-wait-label: "风控等待";
     out property <string> progress-display-text: root.progress-text + (root.verify-waiting
-        ? (root.verify-secs > 0 ? " · 风控等待 " + root.verify-secs + " 秒" : " · 正在检查恢复…") : "");
+        ? (root.verify-secs > 0 ? " · " + root.verify-wait-label + " " + root.verify-secs + " 秒" : " · 正在检查恢复…") : "");
+    in-out property <bool> account-offline: false;
+    in-out property <[OfflineAccountRow]> offline-accounts;
+    callback offline-import-file(); callback offline-import-folder(); callback offline-export(); callback offline-choose(string);
+    in-out property <bool> account-logged-in: false;
+    in-out property <string> account-name: "";
+    in-out property <string> account-uid: "";
+    in-out property <image> account-avatar;
+    in-out property <bool> account-has-avatar: false;
+    in-out property <string> account-avatar-key: "";
     in-out property <string> account-text: "";
     in-out property <[VideoRow]> videos: [];
     in-out property <int> selected-count: 0;
     in-out property <string> new-video-text: "";
     in-out property <int> scope: 0;
     in-out property <bool> include-replies: true;
-    in-out property <bool> range-video-enabled: true;
-    in-out property <string> range-video-from: "1";
+    in-out property <bool> range-video-enabled: false;
+    in-out property <bool> range-video-available: false;
+    in-out property <bool> range-video-loading: false;
+    in-out property <string> range-video-from: "";
     in-out property <string> range-video-to: "";
     in-out property <string> range-video-total: "未获取";
     in-out property <string> range-video-limit: "";
-    in-out property <bool> range-video-all-pending: false;
-    in-out property <bool> range-dynamic-enabled: true;
-    in-out property <string> range-dynamic-from: "1";
+    in-out property <bool> range-dynamic-enabled: false;
+    in-out property <bool> range-dynamic-available: false;
+    in-out property <bool> range-dynamic-loading: false;
+    in-out property <string> range-dynamic-from: "";
     in-out property <string> range-dynamic-to: "";
     in-out property <string> range-dynamic-total: "未获取";
     in-out property <string> range-dynamic-limit: "";
-    in-out property <bool> range-dynamic-all-pending: false;
-    in-out property <bool> range-repost-enabled: true;
-    in-out property <string> range-repost-from: "1";
+    in-out property <bool> range-repost-enabled: false;
+    in-out property <bool> range-repost-available: false;
+    in-out property <bool> range-repost-loading: false;
+    in-out property <string> range-repost-from: "";
     in-out property <string> range-repost-to: "";
     in-out property <string> range-repost-total: "未获取";
     in-out property <string> range-repost-limit: "";
-    in-out property <bool> range-repost-all-pending: false;
-    in-out property <bool> range-article-enabled: true;
-    in-out property <string> range-article-from: "1";
+    in-out property <bool> range-article-enabled: false;
+    in-out property <bool> range-article-available: false;
+    in-out property <bool> range-article-loading: false;
+    in-out property <string> range-article-from: "";
     in-out property <string> range-article-to: "";
     in-out property <string> range-article-total: "未获取";
     in-out property <string> range-article-limit: "";
-    in-out property <bool> range-article-all-pending: false;
-    in-out property <bool> range-audio-enabled: true;
-    in-out property <string> range-audio-from: "1";
+    in-out property <bool> range-audio-enabled: false;
+    in-out property <bool> range-audio-available: false;
+    in-out property <bool> range-audio-loading: false;
+    in-out property <string> range-audio-from: "";
     in-out property <string> range-audio-to: "";
     in-out property <string> range-audio-total: "未获取";
     in-out property <string> range-audio-limit: "";
-    in-out property <bool> range-audio-all-pending: false;
     property <bool> any-range-enabled: root.range-video-enabled || root.range-dynamic-enabled || root.range-repost-enabled || root.range-article-enabled || root.range-audio-enabled;
     // 设置
+    private property <bool> modal-open: root.settings-visible || root.qr-visible || root.alert-visible || root.message-groups-confirm || root.verify-visible;
+    // Keep underlying popup instances mounted so closing a nested alert restores focus and scrolling.
+    private property <int> modal-kind: root.verify-visible ? 5 : root.alert-visible ? 4 : root.message-groups-confirm ? 3 : root.qr-visible ? 2 : root.settings-visible ? 1 : 0;
+    changed modal-kind => {
+        if root.modal-kind < 5 { verify-modal.close(); }
+        if root.modal-kind < 4 { alert-modal.close(); }
+        if root.modal-kind < 3 { groups-modal.close(); }
+        if root.modal-kind < 2 { qr-modal.close(); }
+        if root.modal-kind < 1 { settings-modal.close(); }
+        if root.modal-kind == 1 && !settings-modal.is-open { settings-modal.show(); }
+        else if root.modal-kind == 2 && !qr-modal.is-open { qr-modal.show(); }
+        else if root.modal-kind == 3 && !groups-modal.is-open { groups-modal.show(); }
+        else if root.modal-kind == 4 && !alert-modal.is-open { alert-modal.show(); }
+        else if root.modal-kind == 5 && !verify-modal.is-open { verify-modal.show(); }
+    }
     in-out property <bool> settings-visible: false;
     in-out property <bool> alert-visible: false;
     in-out property <string> alert-text: "";
@@ -219,11 +925,11 @@ export component AppWindow inherits Window {
     in-out property <bool> web-running: false;
     in-out property <string> web-port-text: "8686";
     in-out property <string> export-dir-text: "";
-    in-out property <bool> auto-export: false;
     // 所有翻页拉取共用的间隔区间（毫秒），每次翻页在区间内随机
     in-out property <string> page-delay-text: "1800";
     in-out property <string> page-delay-max-text: "2400";
     in-out property <bool> verify-visible: false;
+
     in-out property <bool> verify-background: false;
     in-out property <int> verify-secs: 0;
     in-out property <string> verify-text: "";
@@ -237,7 +943,6 @@ export component AppWindow inherits Window {
     in-out property <int> stat-comments: 0;
     in-out property <int> stat-replies: 0;
     in-out property <string> stat-likes: "0";
-    in-out property <string> preview-text: "";
     in-out property <string> log-text: "";
     in-out property <bool> has-data: false;
     in-out property <string> foot-text: "就绪";
@@ -251,17 +956,19 @@ export component AppWindow inherits Window {
     callback stop();
     callback clear-resume();
     callback export-clicked();
-    callback open-web();
-    callback import-clicked();
     callback open-dir();
-    callback clear-all();
     callback verify-dismiss();
     callback qr-login();
     callback qr-cancel();
     callback range-enabled(int, bool);
+    callback range-retry(int);
+    callback preview-status-clicked();
     callback range-all(int);
     callback range-edited(int);
-    callback split-import-clicked();
+    in-out property <bool> resource-avatars: false;
+    in-out property <bool> resource-covers: false;
+    in-out property <bool> resource-content-images: false;
+    callback process-resources();
     callback settings-open();
     callback settings-close();
     callback settings-apply();
@@ -273,7 +980,7 @@ export component AppWindow inherits Window {
     // ================= 顶栏 =================
     VerticalLayout {
         Rectangle {
-            height: 70px;
+            height: max(70px, header-account.height + 24px);
             background: Theme.card;
             drop-shadow-blur: 10px;
             drop-shadow-color: #0F172A0A;
@@ -293,9 +1000,9 @@ export component AppWindow inherits Window {
                     border-radius: 11px;
                     background: @linear-gradient(135deg, #FB7299 0%, #FF9BB6 55%, #00A1D6 140%);
                     Text {
-                        text: "评";
+                        text: root.workspace == 0 ? "评" : "信";
                         color: white;
-                        font-size: 18px;
+                        font-size: Theme.font-icon;
                         font-weight: 700;
                         horizontal-alignment: center;
                         vertical-alignment: center;
@@ -305,198 +1012,56 @@ export component AppWindow inherits Window {
                     drop-shadow-offset-y: 3px;
                 }
 
-                VerticalLayout {
-                    spacing: 1px;
-                    alignment: center;
-                    Text { text: "评论聚合台"; color: Theme.text; font-size: 16px; font-weight: 700; vertical-alignment: center; }
-                    Text { text: "创作中心评论 · 一次采集，整合为 JSON"; color: Theme.faint; font-size: 10.5px; vertical-alignment: center; }
-                }
+                WorkspacePicker { blocked: root.modal-open; current: root.workspace; chosen(value) => { root.workspace-chosen(value); } }
 
                 Rectangle { horizontal-stretch: 1; background: transparent; }
 
-                // 进度
-                VerticalLayout {
-                    visible: root.busy;
-                    width: root.busy ? 180px : 0px;
-                    spacing: 4px;
-                    alignment: center;
-                    Rectangle {
-                        height: 5px;
-                        border-radius: 3px;
-                        background: #EDEFF5;
-                        Rectangle {
-                            height: 100%;
-                            width: max(6px, parent.width * root.progress);
-                            border-radius: 3px;
-                            background: @linear-gradient(90deg, #FB7299 0%, #FF9BB6 100%);
-                            animate width { duration: 160ms; }
-                        }
-                    }
-                    Text { text: root.progress-display-text; color: Theme.muted; font-size: 10px; horizontal-alignment: right; vertical-alignment: center; }
-                }
 
-                    // 状态胶囊（同时也是「打开网页预览」的入口），高度与右侧按钮一致
-                    Rectangle {
-                        height: 36px;
-                        width: status-label.preferred-width + 38px;
-                        border-radius: 18px;
-                    background: root.status-ok
-                        ? (status-hit.has-hover ? #DDF5EA : #E9F8F1)
-                        : (status-hit.has-hover ? #E8EBF2 : #EFF1F6);
-                    animate background { duration: 90ms; }
-                    // 绿点绝对定位：y 用 (父高 - 自身高)/2 精确垂直居中
-                    Rectangle {
-                        x: 10px;
-                        y: (parent.height - self.height) / 2;
-                        width: 6px;
-                        height: 6px;
-                        border-radius: 3px;
-                        background: root.status-ok ? Theme.ok : #9BA2B3;
+                Rectangle {
+                    width: header-account.width + 8px + 84px; height: header-account.height;
+                    header-account := AccountEntry {
+                        blocked: root.modal-open;
+                        x: 0px; y: 0px;
+                        logged-in: root.account-logged-in; offline: root.account-offline; local-accounts: root.offline-accounts; busy: root.busy || root.loading-local;
+                        name: root.account-name; uid: root.account-uid;
+                        available-name-width: max(160px, root.width - 430px);
+                        avatar: root.account-avatar; has-avatar: root.account-has-avatar;
+                        login => {root.qr-login();}
+                        import-file => {root.offline-import-file();} import-folder => {root.offline-import-folder();}
+                        export-library => {root.offline-export();} choose-offline(key) => {root.offline-choose(key);}
                     }
-                    status-label := Text {
-                        x: 22px;
-                        y: 0;
-                        width: parent.width - 34px;
-                        height: parent.height;
-                        text: root.status-text;
-                        color: root.status-ok ? #12855A : #6C7386;
-                        font-size: 11px;
-                        horizontal-alignment: left;
-                        vertical-alignment: center;
-                    }
-                    status-hit := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { root.open-web(); }
-                    }
+                    Btn { x: header-account.width + 8px; y: (parent.height - self.height) / 2; width: 84px; height: 32px; text: "设置"; clicked => {root.settings-open();} }
                 }
-
-                    Btn {
-                        text: "设置";
-                        width: 84px;
-                        clicked => { root.settings-open(); }
-                    }
                 }
             }
         }
 
         // ================= 主体 =================
-        HorizontalLayout {
-            padding-top: 14px;
-            padding-bottom: 14px;
-            padding-left: 16px;
-            padding-right: 16px;
-            spacing: 14px;
-
+        Rectangle { vertical-stretch: 1;
+        comments-workspace := WorkspaceSurface {
+            width: parent.width; height: parent.height;
+            visible: root.workspace == 0;
             // ---------- 左列 ----------
-            VerticalLayout {
-                width: 372px;
-                spacing: 14px;
-
-                // 账号卡片
-                Rectangle {
-                    // 未登录时推荐文案会换行，需要高一点；登录后只有一行，收紧去掉底部留白
-                    height: root.account-text == "" ? 117px : 99px;
-                    background: Theme.card;
-                    border-radius: 14px;
-                    border-width: 1px;
-                    border-color: Theme.border;
-                    drop-shadow-blur: 14px;
-                    drop-shadow-color: #10182808;
-                    drop-shadow-offset-y: 2px;
-
-                    VerticalLayout {
-                        padding: 10px;
-                        spacing: 5px;
-
-                        HorizontalLayout {
-                            spacing: 6px;
-                            SectionTitle { label: "① 账号"; vertical-stretch: 1; }
-                        }
-
-                        HorizontalLayout {
-                            spacing: 8px;
-                            Btn {
-                                text: "扫码登录";
-                                primary: true;
-                                width: 88px;
-                                enabled: !root.busy;
-                                clicked => { root.qr-login(); }
-                            }
-                            Btn {
-                                text: root.busy ? "读取中…" : "读取稿件";
-                                horizontal-stretch: 1;
-                                enabled: !root.busy;
-                                clicked => { root.read-archives(root.sessdata); }
-                            }
-                            Btn {
-                                text: "清空";
-                                width: 52px;
-                                enabled: !root.busy;
-                                clicked => { root.clear-all(); }
-                            }
-                        }
-
-                        Text {
-                            text: root.account-text == "" ? "推荐扫码登录：一次拿全套 Cookie 与设备指纹，接口校验（-352）基本不会再拦" : root.account-text;
-                            color: root.account-text == "" ? Theme.faint : Theme.ok;
-                            font-size: 10px;
-                            wrap: word-wrap;
-                        }
-                    }
-                }
+            comments-left := VerticalLayout {
+                width: Theme.sidebar-width;
+                spacing: Theme.workspace-gap;
 
                 // 采集范围卡片
-                Rectangle {
-                    background: Theme.card;
-                    border-radius: 14px;
-                    border-width: 1px;
-                    border-color: Theme.border;
-                    drop-shadow-blur: 14px;
-                    drop-shadow-color: #10182808;
-                    drop-shadow-offset-y: 2px;
+                comments-range := HubPanel {
+                    vertical-stretch: 1;
 
                     VerticalLayout {
-                        padding: 14px;
+                        padding: Theme.panel-padding;
                         spacing: 9px;
 
-                        HorizontalLayout {
-                            spacing: 6px;
-                            SectionTitle { label: "② 采集范围"; vertical-stretch: 1; }
-
+                        comments-range-header := SectionHeader {
+                            label: "采集范围"; expand-title: true;
+                            if root.scope == 1 : TextAction { text: "读取稿件"; enabled: !root.account-offline && !root.busy && !root.loading-local; clicked => { root.read-archives(root.sessdata); } }
+                            if root.scope == 1 : TextAction { text: "全选 / 反选"; enabled: !root.busy && !root.loading-local; clicked => { root.toggle-all(); } }
                             Rectangle {
-                                height: 20px;
-                                width: root.scope == 1 ? 62px : 0px;
-                                clip: true;
-                                border-radius: 10px;
-                                background: select-all.has-hover ? #FFF0F5 : transparent;
-                                HorizontalLayout {
-                                    padding-left: 4px;
-                                    padding-right: 4px;
-                                    alignment: center;
-                                    Text { text: "全选 / 反选"; color: Theme.accent-dark; font-size: 9.5px; vertical-alignment: center; }
-                                }
-                                select-all := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => { root.toggle-all(); }
-                                }
-                            }
-
-                            Rectangle {
-                                height: 19px;
-                                border-radius: 10px;
+                                width: count-label.preferred-width + 16px; height: 20px; border-radius: 10px;
                                 background: root.scope == 0 ? #EEF4FB : Theme.accent-soft;
-                                HorizontalLayout {
-                                    padding-left: 8px;
-                                    padding-right: 8px;
-                                    alignment: center;
-                                    Text {
-                                        text: root.scope == 0 ? "全量" : (root.selected-count + " / " + root.videos.length);
-                                        color: root.scope == 0 ? #4A84B8 : Theme.accent-dark;
-                                        font-size: 10px;
-                                        font-weight: 600;
-                                        vertical-alignment: center;
-                                    }
-                                }
+                                count-label := Text { text: root.scope == 0 ? "全量" : (root.selected-count + " / " + root.videos.length); color: root.scope == 0 ? #4A84B8 : Theme.accent-dark; font-size: Theme.font-hint; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
                             }
                         }
 
@@ -517,7 +1082,7 @@ export component AppWindow inherits Window {
                                     background: root.scope == 0 ? white : transparent;
                                     border-width: root.scope == 0 ? 1px : 0px;
                                     border-color: #E9ECF3;
-                                    Text { text: "创作中心"; color: root.scope == 0 ? Theme.accent-dark : Theme.faint; font-size: 10.5px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                                    Text { text: "创作中心"; color: root.scope == 0 ? Theme.accent-dark : Theme.faint; font-size: Theme.font-body; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
                                     TouchArea { mouse-cursor: pointer; clicked => { root.scope = 0; } }
                                 }
 
@@ -526,7 +1091,7 @@ export component AppWindow inherits Window {
                                     background: root.scope == 1 ? white : transparent;
                                     border-width: root.scope == 1 ? 1px : 0px;
                                     border-color: #E9ECF3;
-                                    Text { text: "仅勾选稿件"; color: root.scope == 1 ? Theme.accent-dark : Theme.faint; font-size: 10.5px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                                    Text { text: "仅勾选稿件"; color: root.scope == 1 ? Theme.accent-dark : Theme.faint; font-size: Theme.font-body; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
                                     TouchArea { mouse-cursor: pointer; clicked => { root.scope = 1; } }
                                 }
                             }
@@ -539,17 +1104,19 @@ export component AppWindow inherits Window {
                             range-note := Text {
                                 x: 8px; y: 8px; width: parent.width - 16px; height: self.preferred-height;
                                 text: "各类型独立页码 · 每页 10 条 · 结束页留空到末页";
-                                color: Theme.faint; font-size: 9px; wrap: word-wrap;
+                                color: Theme.faint; font-size: Theme.font-hint; wrap: word-wrap;
                             }
-                            range-scroll := ScrollView {
+                            range-scroll := HubScrollView {
                                 x: 8px; y: range-note.y + range-note.height + 6px;
                                 width: parent.width - 16px;
-                                height: max(0px, parent.height - self.y - 8px - (root.has-resume ? 40px : 0px));
+                                height: max(0px, parent.height - self.y - 8px - (root.has-resume ? 56px : 0px));
                                 content-width: self.visible-width;
-                                content-height: 392px;
+                                content-height: 5 * Theme.range-row-height + 4 * Theme.range-row-gap;
                                 CollectionRangeRow {
                                     x: 0px; y: 0px; width: range-scroll.visible-width - 4px;
                                     label: "视频"; busy: root.busy;
+                                    available: root.range-video-available; retryable: root.range-video-limit == "" && !root.range-video-loading;
+                                    retry-requested => { root.range-retry(1); }
                                     selected <=> root.range-video-enabled;
                                     from-text <=> root.range-video-from;
                                     to-text <=> root.range-video-to;
@@ -559,8 +1126,10 @@ export component AppWindow inherits Window {
                                     bounds-edited => { root.range-edited(1); }
                                 }
                                 CollectionRangeRow {
-                                    x: 0px; y: 80px; width: range-scroll.visible-width - 4px;
+                                    x: 0px; y: 1 * (Theme.range-row-height + Theme.range-row-gap); width: range-scroll.visible-width - 4px;
                                     label: "动态"; busy: root.busy;
+                                    available: root.range-dynamic-available; retryable: root.range-dynamic-limit == "" && !root.range-dynamic-loading;
+                                    retry-requested => { root.range-retry(11); }
                                     selected <=> root.range-dynamic-enabled;
                                     from-text <=> root.range-dynamic-from;
                                     to-text <=> root.range-dynamic-to;
@@ -570,8 +1139,10 @@ export component AppWindow inherits Window {
                                     bounds-edited => { root.range-edited(11); }
                                 }
                                 CollectionRangeRow {
-                                    x: 0px; y: 160px; width: range-scroll.visible-width - 4px;
+                                    x: 0px; y: 2 * (Theme.range-row-height + Theme.range-row-gap); width: range-scroll.visible-width - 4px;
                                     label: "转发动态"; busy: root.busy;
+                                    available: root.range-repost-available; retryable: root.range-repost-limit == "" && !root.range-repost-loading;
+                                    retry-requested => { root.range-retry(17); }
                                     selected <=> root.range-repost-enabled;
                                     from-text <=> root.range-repost-from;
                                     to-text <=> root.range-repost-to;
@@ -581,8 +1152,10 @@ export component AppWindow inherits Window {
                                     bounds-edited => { root.range-edited(17); }
                                 }
                                 CollectionRangeRow {
-                                    x: 0px; y: 240px; width: range-scroll.visible-width - 4px;
+                                    x: 0px; y: 3 * (Theme.range-row-height + Theme.range-row-gap); width: range-scroll.visible-width - 4px;
                                     label: "专栏"; busy: root.busy;
+                                    available: root.range-article-available; retryable: root.range-article-limit == "" && !root.range-article-loading;
+                                    retry-requested => { root.range-retry(12); }
                                     selected <=> root.range-article-enabled;
                                     from-text <=> root.range-article-from;
                                     to-text <=> root.range-article-to;
@@ -592,8 +1165,10 @@ export component AppWindow inherits Window {
                                     bounds-edited => { root.range-edited(12); }
                                 }
                                 CollectionRangeRow {
-                                    x: 0px; y: 320px; width: range-scroll.visible-width - 4px;
+                                    x: 0px; y: 4 * (Theme.range-row-height + Theme.range-row-gap); width: range-scroll.visible-width - 4px;
                                     label: "音频"; busy: root.busy;
+                                    available: root.range-audio-available; retryable: root.range-audio-limit == "" && !root.range-audio-loading;
+                                    retry-requested => { root.range-retry(14); }
                                     selected <=> root.range-audio-enabled;
                                     from-text <=> root.range-audio-from;
                                     to-text <=> root.range-audio-to;
@@ -604,9 +1179,9 @@ export component AppWindow inherits Window {
                                 }
                             }
                             if root.has-resume : HorizontalLayout {
-                                x: 8px; y: parent.height - 40px; width: parent.width - 16px; height: 32px;
+                                x: 8px; y: parent.height - 56px; width: parent.width - 16px; height: 48px;
                                 spacing: 6px;
-                                Text { text: root.resume-text; color: Theme.accent-dark; font-size: 9px; wrap: word-wrap; horizontal-stretch: 1; }
+                                Text { vertical-alignment: top; text: root.resume-text; color: Theme.accent-dark; font-size: Theme.font-hint; wrap: word-wrap; horizontal-stretch: 1; }
                                 Btn { text: "清除"; width: 44px; small: true; enabled: !root.busy; clicked => { root.clear-resume(); } }
                             }
                         }
@@ -622,61 +1197,67 @@ export component AppWindow inherits Window {
                                 alignment: center;
                                 spacing: 4px;
                                 visible: root.videos.length == 0;
-                                Text { text: "还没有稿件"; color: #8C93A6; font-size: 11.5px; horizontal-alignment: center; }
-                                Text { text: "点上方「读取稿件」或在下方粘贴 BV 号"; color: Theme.faint; font-size: 10px; horizontal-alignment: center; }
+                                Text { text: "还没有稿件"; color: #8C93A6; font-size: Theme.font-body; horizontal-alignment: center; }
+                                Text { text: "点上方「读取稿件」或在下方粘贴 BV 号"; color: Theme.faint; font-size: Theme.font-hint; horizontal-alignment: center; }
                             }
 
-                            ListView {
-                                for row[i] in root.videos : Rectangle {
-                                    height: 56px;
-                                    background: row.checked ? #FFF7FA : transparent;
+                            Rectangle {
+                                width: parent.width; height: parent.height;
+                                hub-list-0 := ListView {
+                                    width: parent.width - 10px; height: parent.height;
+                                    vertical-scrollbar-policy: always-off; horizontal-scrollbar-policy: always-off;
+                                    for row[i] in root.videos : Rectangle {
+                                        height: 56px;
+                                        background: row.checked ? #FFF7FA : transparent;
 
-                                    Rectangle {
-                                        y: parent.height - 1px;
-                                        height: 1px;
-                                        width: 100%;
-                                        background: #F2F4F9;
-                                    }
-
-                                    HorizontalLayout {
-                                        padding-left: 9px;
-                                        padding-right: 9px;
-                                        spacing: 9px;
-
-                                        // 勾选框单独包一层，保证固定 18px 在行内垂直居中
-                                        VerticalLayout {
-                                            alignment: center;
-                                            CheckBox { checked: row.checked; }
+                                        Rectangle {
+                                            y: parent.height - 1px;
+                                            height: 1px;
+                                            width: 100%;
+                                            background: #F2F4F9;
                                         }
 
-                                        VerticalLayout {
-                                            spacing: 2px;
-                                            horizontal-stretch: 1;
-                                            alignment: center;
-                                            Text {
-                                                text: row.title == "" ? ("av" + row.bvid) : row.title;
-                                                color: Theme.text;
-                                                font-size: 11.5px;
-                                                horizontal-alignment: left;
-                                                overflow: elide;
-                                                vertical-alignment: center;
+                                        HorizontalLayout {
+                                            padding-left: 9px;
+                                            padding-right: 9px;
+                                            spacing: 9px;
+
+                                            // 勾选框单独包一层，保证固定 18px 在行内垂直居中
+                                            VerticalLayout {
+                                                alignment: center;
+                                                CheckBox { checked: row.checked; }
                                             }
-                                            Text {
-                                                text: row.meta;
-                                                color: Theme.faint;
-                                                font-size: 9.5px;
-                                                horizontal-alignment: left;
-                                                overflow: elide;
-                                                vertical-alignment: center;
+
+                                            VerticalLayout {
+                                                spacing: 2px;
+                                                horizontal-stretch: 1;
+                                                alignment: center;
+                                                Text {
+                                                    text: row.title;
+                                                    color: Theme.text;
+                                                    font-size: Theme.font-body;
+                                                    horizontal-alignment: left;
+                                                    overflow: elide;
+                                                    vertical-alignment: center;
+                                                }
+                                                Text {
+                                                    text: row.meta;
+                                                    color: Theme.faint;
+                                                    font-size: Theme.font-hint;
+                                                    horizontal-alignment: left;
+                                                    overflow: elide;
+                                                    vertical-alignment: center;
+                                                }
                                             }
                                         }
-                                    }
 
-                                    TouchArea {
-                                        mouse-cursor: pointer;
-                                        clicked => { root.toggle-video(i); }
+                                        TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { root.toggle-video(row.index); }
+                                        }
                                     }
                                 }
+                                HubScrollBar { x: parent.width - 10px; width: 10px; height: parent.height; extent: hub-list-0.content-height; page: hub-list-0.visible-height; offset <=> hub-list-0.content-y; }
                             }
                         }
 
@@ -688,13 +1269,13 @@ export component AppWindow inherits Window {
                                 border-radius: 9px;
                                 background: Theme.field;
                                 border-width: 1px;
-                                border-color: bv.has-focus ? #FBC3D3 : #E6E9F1;
+                                border-color: bv.has-focus ? #F7C3D3 : Theme.border;
                                 horizontal-stretch: 1;
 
                                 Text {
                                     text: "BV 号 / av 号 / 视频链接";
                                     color: #ABB1C0;
-                                    font-size: 10.5px;
+                                    font-size: Theme.font-body;
                                     x: 9px;
                                     y: 0;
                                     height: parent.height;
@@ -709,7 +1290,7 @@ export component AppWindow inherits Window {
                                     text <=> root.new-video-text;
                                     single-line: true;
                                     color: Theme.text;
-                                    font-size: 11px;
+                                    font-size: Theme.font-body;
                                     vertical-alignment: center;
                                     accepted => { root.add-video(root.new-video-text); }
                                 }
@@ -728,30 +1309,27 @@ export component AppWindow inherits Window {
             }
 
             // ---------- 右列 ----------
-            VerticalLayout {
-                spacing: 14px;
+            comments-right := VerticalLayout {
+                horizontal-stretch: 1;
+                min-width: 0px;
+                spacing: 0px;
 
                 // 采集与导出
-                Rectangle {
-                    height: 172px;
-                    background: Theme.card;
-                    border-radius: 14px;
-                    border-width: 1px;
-                    border-color: Theme.border;
-                    drop-shadow-blur: 14px;
-                    drop-shadow-color: #10182808;
-                    drop-shadow-offset-y: 2px;
+                comments-actions := HubPanel {
+                    height: Theme.actions-height;
 
                     VerticalLayout {
-                        padding: 14px;
-                        spacing: 10px;
+                        padding: Theme.panel-padding;
+                        padding-bottom: Theme.actions-bottom-padding;
+                        spacing: 6px;
 
-                        HorizontalLayout {
-                            spacing: 6px;
-                            SectionTitle { label: "③ 采集与导出"; vertical-stretch: 1; }
+                        comments-actions-header := SectionHeader {
+                            label: "采集与导出";
+                            Text { min-width: 0px; horizontal-stretch: 1; horizontal-alignment: right; overflow: elide; text: "按类型自动归档 · 每稿件一份"; color: Theme.faint; font-size: Theme.font-hint; vertical-alignment: center; }
                         }
 
                         HorizontalLayout {
+                            height: 32px;
                             spacing: 18px;
 
                             // 二级回复开关
@@ -764,8 +1342,8 @@ export component AppWindow inherits Window {
                                 VerticalLayout {
                                     spacing: 0px;
                                     alignment: center;
-                                    Text { text: "包含楼中楼回复"; color: Theme.text; font-size: 11.5px; horizontal-alignment: left; vertical-alignment: center; }
-                                    Text { text: "关闭则只保留主评论"; color: Theme.faint; font-size: 9.5px; horizontal-alignment: left; vertical-alignment: center; }
+                                    Text { text: "包含楼中楼回复"; color: Theme.text; font-size: Theme.font-body; horizontal-alignment: left; vertical-alignment: center; }
+                                    Text { text: "关闭则只保留主评论"; color: Theme.faint; font-size: Theme.font-hint; horizontal-alignment: left; vertical-alignment: center; }
                                 }
                             }
 
@@ -773,11 +1351,11 @@ export component AppWindow inherits Window {
                             VerticalLayout {
                                 spacing: 2px;
                                 alignment: center;
-                                Text { text: "抓取范围"; color: Theme.faint; font-size: 9.5px; vertical-alignment: center; }
+                                Text { text: "抓取范围"; color: Theme.faint; font-size: Theme.font-hint; vertical-alignment: center; }
                                 Text {
                                     text: root.scope == 0 ? "各类型独立页码 · 10 条/页" : "勾选稿件的全部评论";
                                     color: Theme.text;
-                                    font-size: 11.5px;
+                                    font-size: Theme.font-body;
                                     font-weight: 600;
                                     vertical-alignment: center;
                                 }
@@ -790,7 +1368,6 @@ export component AppWindow inherits Window {
                                 text: "导出 JSON";
                                 primary: true;
                                 width: 92px;
-                                small: true;
                                 enabled: !root.busy && root.has-data;
                                 clicked => { root.export-clicked(); }
                             }
@@ -798,193 +1375,168 @@ export component AppWindow inherits Window {
 
                         Rectangle { height: 1px; background: #F1F3F8; }
 
-                        HorizontalLayout {
-                            spacing: 8px;
-                            if root.busy : Btn {
-                                text: "暂停";
-                                enabled: !root.loading-local;
-                                primary: false;
-                                horizontal-stretch: 1;
-                                clicked => { root.pause(); }
-                            }
-                            if root.busy : Btn {
-                                text: "结束";
-                                enabled: !root.loading-local;
-                                primary: true;
-                                width: 72px;
-                                clicked => { root.stop(); }
-                            }
-                            if !root.busy : Btn {
-                                text: root.has-resume ? "继续采集（断点）" : (root.scope == 0 ? "开始采集全部评论" : "开始采集所选稿件");
-                                primary: true;
-                                // 全部稿件模式不需要先勾选
-                                enabled: root.scope == 0 ? root.any-range-enabled : root.selected-count > 0;
-                                horizontal-stretch: 1;
-                                clicked => { root.start(); }
-                            }
-                            Btn {
-                                text: "导入合并";
-                                width: 86px;
-                                enabled: !root.busy;
-                                clicked => { root.import-clicked(); }
-                            }
-                            Btn {
-                                text: "导入拆解"; width: 86px; enabled: !root.busy;
-                                clicked => { root.split-import-clicked(); }
-                            }
+                        comments-task-controls := TaskControls {
+                            workspace: 1; active-task: root.active-task; busy: root.busy; loading-local: root.loading-local;
+                            start-label: root.has-resume ? "继续采集（断点）" : (root.scope == 0 ? "开始采集全部评论" : "开始采集所选稿件");
+                            start-enabled: !root.account-offline && (root.scope == 0 ? root.any-range-enabled : root.selected-count > 0);
+                            start => {root.start();} pause => {root.pause();} stop => {root.stop();}
                         }
                     }
                 }
 
                 // 结果
-                Rectangle {
-                    background: Theme.card;
-                    border-radius: 14px;
-                    border-width: 1px;
-                    border-color: Theme.border;
-                    drop-shadow-blur: 14px;
-                    drop-shadow-color: #10182808;
-                    drop-shadow-offset-y: 2px;
-                    vertical-stretch: 1;
-
-                    VerticalLayout {
-                        padding: 10px;
-                        spacing: 7px;
-
-                        HorizontalLayout {
-                            height: 20px;
-                            spacing: 6px;
-                            SectionTitle { label: "④ 结果预览"; vertical-stretch: 1; }
-                        }
-
-                        HorizontalLayout {
-                            spacing: 8px;
-
-                            Rectangle {
-                                height: 54px;
-                                horizontal-stretch: 1;
-                                border-radius: 10px;
-                                background: #F8F9FC;
-                                border-width: 1px;
-                                border-color: #EFF1F7;
-                                VerticalLayout {
-                                    alignment: center;
-                                    Text { text: root.stat-videos; color: Theme.text; font-size: 17px; font-weight: 700; horizontal-alignment: center; }
-                                    Text { text: "稿件"; color: Theme.faint; font-size: 9.5px; horizontal-alignment: center; }
-                                }
-                            }
-                            Rectangle {
-                                height: 54px;
-                                horizontal-stretch: 1;
-                                border-radius: 10px;
-                                background: #F8F9FC;
-                                border-width: 1px;
-                                border-color: #EFF1F7;
-                                VerticalLayout {
-                                    alignment: center;
-                                    Text { text: root.stat-dynamics; color: Theme.text; font-size: 17px; font-weight: 700; horizontal-alignment: center; }
-                                    Text { text: "动态"; color: Theme.faint; font-size: 9.5px; horizontal-alignment: center; }
-                                }
-                            }
-                            Rectangle {
-                                height: 54px;
-                                horizontal-stretch: 1;
-                                border-radius: 10px;
-                                background: #F8F9FC;
-                                border-width: 1px;
-                                border-color: #EFF1F7;
-                                VerticalLayout {
-                                    alignment: center;
-                                    Text { text: root.stat-comments; color: Theme.text; font-size: 17px; font-weight: 700; horizontal-alignment: center; }
-                                    Text { text: "主评论"; color: Theme.faint; font-size: 9.5px; horizontal-alignment: center; }
-                                }
-                            }
-                            Rectangle {
-                                height: 54px;
-                                horizontal-stretch: 1;
-                                border-radius: 10px;
-                                background: #F8F9FC;
-                                border-width: 1px;
-                                border-color: #EFF1F7;
-                                VerticalLayout {
-                                    alignment: center;
-                                    Text { text: root.stat-replies; color: Theme.text; font-size: 17px; font-weight: 700; horizontal-alignment: center; }
-                                    Text { text: "二级回复"; color: Theme.faint; font-size: 9.5px; horizontal-alignment: center; }
-                                }
-                            }
-                            Rectangle {
-                                height: 54px;
-                                horizontal-stretch: 1;
-                                border-radius: 10px;
-                                background: Theme.accent-soft;
-                                border-width: 1px;
-                                border-color: #FFE1EB;
-                                VerticalLayout {
-                                    alignment: center;
-                                    Text { text: root.stat-likes; color: Theme.accent-dark; font-size: 17px; font-weight: 700; horizontal-alignment: center; }
-                                    Text { text: "累计点赞"; color: #C97C97; font-size: 9.5px; horizontal-alignment: center; }
-                                }
-                            }
-                        }
-
-                        Rectangle {
-                            background: #FBFCFE;
-                            border-radius: 10px;
-                            border-width: 1px;
-                            border-color: #EDEFF5;
-                            vertical-stretch: 1;
-                            clip: true;
-
-                            preview-editor := TextEdit {
-                                width: parent.width; height: parent.height;
-                                text <=> root.preview-text;
-                                read-only: false;
-                                font-size: 10.5px;
-                                wrap: word-wrap;
-                                placeholder-text: "采集或导入后显示 JSON 预览，可框选、复制和粘贴";
-                            }
-                        }
-                    }
+                Rectangle { height: Theme.actions-stats-gap; background: transparent; }
+                comments-stats := StatsPreview {
+                    StatCard { label: "稿件"; value: root.stat-videos; }
+                    StatCard { label: "动态"; value: root.stat-dynamics; }
+                    StatCard { label: "主评论"; value: root.stat-comments; }
+                    StatCard { label: "二级回复"; value: root.stat-replies; }
+                    StatCard { label: "累计点赞"; value: root.stat-likes; accent: true; }
                 }
 
                 // 日志
-                Rectangle {
-                    height: 132px;
-                    background: #171A22;
-                    border-radius: 14px;
-                    border-width: 1px;
-                    border-color: #23262F;
-                    drop-shadow-blur: 14px;
-                    drop-shadow-color: #10182812;
-                    drop-shadow-offset-y: 2px;
+                Rectangle { height: Theme.workspace-gap; background: transparent; }
+                comments-log := HubLogPanel { text: root.log-text; }
+            }
 
+        }
+
+        messages-workspace := WorkspaceSurface {
+            width: parent.width; height: parent.height;
+            visible: root.workspace == 1;
+            messages-left := VerticalLayout {
+                width: Theme.sidebar-width;
+                spacing: Theme.workspace-gap;
+                messages-range := HubPanel {
+                    vertical-stretch: 1;
                     VerticalLayout {
-                        padding: 12px;
-                        spacing: 6px;
-
+                        padding: Theme.panel-padding; spacing: 9px;
+                        messages-range-header := SectionHeader { label: "采集范围"; expand-title: true; }
+                    message-options-scroll := HubScrollView {
+                        horizontal-stretch: 1; vertical-stretch: 1;
+                        content-width: self.visible-width;
+                        content-height: max(message-controls.preferred-height, self.visible-height);
+                    message-controls := VerticalLayout {
+                        width: message-options-scroll.visible-width; height: message-options-scroll.content-height;
+                        alignment: LayoutAlignment.start;
+                        padding: 0px; spacing: 10px;
                         HorizontalLayout {
-                            height: 20px;
-                            spacing: 6px;
-                            Text { text: "运行日志"; color: #E7E9EF; font-size: 11px; font-weight: 700; vertical-alignment: center; }
-                            Text { text: "最新在上"; color: #6B7285; font-size: 9.5px; vertical-alignment: center; }
+                            height: 28px; spacing: 10px;
+                            Toggle { checked <=> root.message-private; enabled: !root.busy; }
+                            Text { height: 28px; font-size: Theme.font-body; text: "私信（含未关注人）"; color: Theme.text; vertical-alignment: center; }
                         }
-
-                        Rectangle {
-                            vertical-stretch: 1; clip: true; background: transparent;
-                            log-scroll := ScrollView {
-                                width: parent.width; height: parent.height;
-                                content-width: self.visible-width;
-                                content-height: max(log-body.preferred-height + 8px, self.visible-height);
-                                log-body := Text {
-                                    x: 0px; y: 0px; width: log-scroll.visible-width - 12px;
-                                    height: self.preferred-height;
-                                    text: root.log-text; color: #A8B0C2; font-size: 10px; wrap: word-wrap;
+                        HorizontalLayout {
+                            height: 28px; spacing: 10px;
+                            Toggle {
+                                checked <=> root.message-groups; enabled: !root.busy;
+                                toggled => {
+                                    if root.message-groups {
+                                        root.message-groups = false;
+                                        root.message-groups-confirm = true;
+                                    }
+                                }
+                            }
+                            Text { height: 28px; font-size: Theme.font-body; text: "粉丝团"; color: Theme.text; vertical-alignment: center; }
+                        }
+                        HorizontalLayout {
+                            height: 28px; spacing: 10px;
+                            Toggle { checked <=> root.message-likes; enabled: !root.busy; }
+                            Text { height: 28px; font-size: Theme.font-body; text: "收到的赞"; color: Theme.text; vertical-alignment: center; }
+                        }
+                        HorizontalLayout {
+                            height: 28px; spacing: 10px;
+                            Toggle { checked <=> root.message-replies; enabled: !root.busy; }
+                            Text { height: 28px; font-size: Theme.font-body; text: "回复我的"; color: Theme.text; vertical-alignment: center; }
+                        }
+                        HorizontalLayout {
+                            height: 28px; spacing: 10px;
+                            Toggle { checked <=> root.message-mentions; enabled: !root.busy; }
+                            Text { height: 28px; font-size: Theme.font-body; text: "@我的"; color: Theme.text; vertical-alignment: center; }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            VerticalLayout {
+                                horizontal-stretch: 1; spacing: 5px;
+                                Text { text: "开始日期"; color: Theme.muted; font-size: Theme.font-body; }
+                                MessageDateField {
+                                    text: root.message-date-display(root.message-from); enabled: root.message-date-editable; invalid: root.message-date-error != "";
+                                    cleared => { root.message-date-clear(0); }
+                                    active: root.workspace == 1 && !root.modal-open; calendar-date: root.message-calendar-date;
+                                    reset-token: root.message-calendar-generation; calendar-year: root.message-calendar-year; calendar-month: root.message-calendar-month; days: root.message-calendar-days;
+                                    calendar-requested => { root.message-calendar-date = root.message-calendar-open(0); }
+                                    month-shift(delta) => { root.message-calendar-shift(delta); }
+                                    month-selected(year,month) => { root.message-calendar-month-changed(year,month); }
+                                    day-selected(day) => { root.message-calendar-day-selected(day); }
+                                    calendar-accepted => { return root.message-calendar-accept(0,root.message-calendar-date); }
+                                }
+                            }
+                            VerticalLayout {
+                                horizontal-stretch: 1; spacing: 5px;
+                                Text { text: "结束日期"; color: Theme.muted; font-size: Theme.font-body; }
+                                MessageDateField {
+                                    text: root.message-date-display(root.message-to); enabled: root.message-date-editable; invalid: root.message-date-error != "";
+                                    cleared => { root.message-date-clear(1); }
+                                    active: root.workspace == 1 && !root.modal-open; calendar-date: root.message-calendar-date;
+                                    reset-token: root.message-calendar-generation; calendar-year: root.message-calendar-year; calendar-month: root.message-calendar-month; days: root.message-calendar-days;
+                                    calendar-requested => { root.message-calendar-date = root.message-calendar-open(1); }
+                                    month-shift(delta) => { root.message-calendar-shift(delta); }
+                                    month-selected(year,month) => { root.message-calendar-month-changed(year,month); }
+                                    day-selected(day) => { root.message-calendar-day-selected(day); }
+                                    calendar-accepted => { return root.message-calendar-accept(1,root.message-calendar-date); }
                                 }
                             }
                         }
+                        Text { text: "yyyy/MM/dd · 留空不限 · 结束日期包含当天"; color: Theme.faint; font-size: Theme.font-hint; wrap: word-wrap; }
+                        if root.message-date-error != "" : Text { text: root.message-date-error; color: Theme.warn; font-size: Theme.font-hint; wrap: word-wrap; }
+                        Text { text: root.message-attachments-status; color: Theme.faint; font-size: Theme.font-hint; wrap: word-wrap; }
+                        Text { text: "自动归档消息与附件；系统会话不采集。\n暂停保留断点，结束保留已保存的数据。"; wrap: word-wrap; color: Theme.faint; font-size: Theme.font-hint; }
+                    }
+                    }
                     }
                 }
             }
+                messages-right := VerticalLayout {
+                    horizontal-stretch: 1; min-width: 0px; spacing: 0px;
+                messages-actions := HubPanel {
+                    height: Theme.actions-height;
+                    VerticalLayout {
+                        padding: Theme.panel-padding;
+                        padding-bottom: Theme.actions-bottom-padding;
+                        spacing: 6px;
+                        messages-actions-header := SectionHeader { label: "采集与导出"; expand-title: true; }
+                        HorizontalLayout {
+                            height: 32px;
+                            spacing: 8px;
+                            Text { min-width: 0px; overflow: elide; text: "消息与附件自动归档"; color: Theme.muted; font-size: Theme.font-body; horizontal-stretch: 1; vertical-alignment: center; }
+
+                            Btn { text: "重试 NG（" + root.message-ng-count + "）"; width: 110px; enabled: !root.busy && root.account-logged-in && root.message-ng-count > 0; clicked => {root.message-retry-ng();} }
+                            Btn { text: "处理附件"; width: 78px; enabled: !root.busy && root.message-attachments-pending > 0; clicked => {root.message-attachments();} }
+                            Btn { text: "导出 JSON"; width: 92px; primary: true; enabled: !root.busy; clicked => {root.message-export();} }
+                        }
+                        Rectangle { height: 1px; background: #F1F3F8; }
+
+                        messages-task-controls := TaskControls {
+                            workspace: 2; active-task: root.active-task; busy: root.busy; loading-local: root.loading-local;
+                            start-label: root.message-has-resume ? "继续采集（断点）" : "开始采集账号消息";
+                            start-enabled: root.account-logged-in && (root.message-private || root.message-groups || root.message-likes || root.message-replies || root.message-mentions);
+                            start => {root.message-start();} pause => {root.pause();} stop => {root.stop();}
+                        }
+                    }
+                }
+                Rectangle { height: Theme.actions-stats-gap; background: transparent; }
+                messages-stats := StatsPreview {
+                    StatCard { label: "回复我的"; value: root.message-count-replies; }
+                    StatCard { label: "@我的"; value: root.message-count-mentions; }
+                    StatCard { label: "赞通知"; value: root.message-count-likes; }
+                    StatCard { label: "私信"; value: root.message-count-private; }
+                    StatCard { label: "粉丝团"; value: root.message-count-groups; }
+                }
+                    Rectangle { height: Theme.workspace-gap; background: transparent; }
+                messages-log := HubLogPanel { text: root.log-text; }
+                }
+
+        }
+
         }
 
         // ================= 状态栏 =================
@@ -1003,467 +1555,568 @@ export component AppWindow inherits Window {
                 padding-left: 16px;
                 padding-right: 16px;
                 spacing: 8px;
-                Rectangle { horizontal-stretch: 1; background: transparent; }
-                Text { text: "BiliCommentHub v1.0"; color: Theme.faint; font-size: 10px; vertical-alignment: center; }
-            }
-        }
-    }
-
-    // ================= 风控弹窗 =================
-    Rectangle {
-        visible: root.verify-visible;
-        x: 0px;
-        y: 0px;
-        width: parent.width;
-        height: parent.height;
-        background: #0B12204D;
-
-        Rectangle {
-            width: 440px;
-            height: 214px;
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            border-radius: 16px;
-            background: white;
-            border-width: 1px;
-            border-color: #FFE1EB;
-            drop-shadow-blur: 34px;
-            drop-shadow-color: #0F172A38;
-
-            VerticalLayout {
-                padding: 20px;
-                spacing: 8px;
-
-                HorizontalLayout {
-                    spacing: 8px;
-                    Rectangle {
-                        width: 28px;
-                        height: 28px;
-                        border-radius: 9px;
-                        background: #FFF0F5;
-                        Text { text: "!"; color: Theme.accent-dark; font-size: 15px; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
-                    }
-                    Text {
-                        text: "接口触发风控，正在自动等待";
-                        color: Theme.text;
-                        font-size: 14.5px;
-                        font-weight: 700;
-                        vertical-alignment: center;
-                    }
+                FocusScope {
+                    width: preview-status.preferred-width; height: 30px;
+                    key-pressed(event) => { if event.text == Key.Return || event.text == Key.Space { root.preview-status-clicked(); return accept; } return reject; }
+                    preview-status := Text { text: root.web-running ? "预览网页服务运行中" : "预览网页服务未运行"; color: root.web-running ? Theme.blue : Theme.muted; font-size: Theme.font-hint; vertical-alignment: center; }
+                    TouchArea { mouse-cursor: pointer; clicked => { root.preview-status-clicked(); } }
                 }
-
-                Text {
-                    text: root.verify-text;
-                    color: Theme.muted;
-                    font-size: 11.5px;
-                    wrap: word-wrap;
-                }
-
-                Text {
-                    text: root.verify-secs > 0
-                        ? (root.progress-text == ""
-                            ? ("剩余 " + root.verify-secs + " 秒")
-                            : ("剩余 " + root.verify-secs + " 秒 · " + root.progress-text))
-                        : (root.progress-text == "" ? "正在检查接口是否恢复…" : ("正在检查接口是否恢复 · " + root.progress-text));
-                    color: Theme.accent-dark;
-                    font-size: 12px;
-                    font-weight: 600;
-                }
-
-                Text {
-                    text: "默认每次等待 60 秒，倒计时结束后检查原采集接口；请求成功后才自动关闭。仍受限时继续等待。";
-                    color: Theme.faint;
-                    font-size: 10px;
-                    wrap: word-wrap;
-                }
-
-                Rectangle { vertical-stretch: 1; background: transparent; }
-
-                HorizontalLayout {
-                    spacing: 8px;
-                    alignment: end;
-                    Btn {
-                        text: "后台继续等";
-                        width: 96px;
-                        small: true;
-                        clicked => { root.verify-dismiss(); }
-                    }
-                }
+                Text { text: root.foot-text; horizontal-stretch: 1; color: Theme.faint; font-size: Theme.font-hint; overflow: elide; vertical-alignment: center; }
+                Text { text: "BiliArchive v1.0"; color: Theme.faint; font-size: Theme.font-hint; vertical-alignment: center; }
             }
         }
     }
 
     // ================= 设置弹窗 =================
-    Rectangle {
-        visible: root.settings-visible;
-        x: 0px;
-        y: 0px;
-        width: parent.width;
-        height: parent.height;
-        background: #0B12204D;
+    settings-modal := PopupWindow {
+        x: 0px; y: 0px; width: root.width; height: root.height;
+        close-policy: no-auto-close; forward-focus: settings-modal-focus;
+        settings-modal-focus := FocusScope {
+            width: parent.width; height: parent.height;
+            key-pressed(event) => {
+                if event.text == Key.Tab { return reject; }
+                if event.text == Key.Escape { root.settings-close(); return accept; }
+                return accept;
+            }
+            Rectangle {
 
-        TouchArea {
-            x: 0px;
-            y: 0px;
-            width: parent.width;
-            height: parent.height;
-            mouse-cursor: default;
-            clicked => { root.settings-close(); }
-        }
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                height: parent.height;
+                background: #0B12204D;
 
-        Rectangle {
-            width: 478px;
-            height: 390px;
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            border-radius: 16px;
-            background: white;
-            border-width: 1px;
-            border-color: #E6E9F1;
-            drop-shadow-blur: 34px;
-            drop-shadow-color: #0F172A38;
-
-            TouchArea { }
-
-            VerticalLayout {
-                padding: 20px;
-                spacing: 13px;
-
-                HorizontalLayout {
-                    spacing: 8px;
-                    Rectangle {
-                        width: 28px;
-                        height: 28px;
-                        border-radius: 9px;
-                        background: #FFF0F5;
-                        Text { text: "设"; color: Theme.accent-dark; font-size: 13px; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
-                    }
-                    Text { text: "设置"; color: Theme.text; font-size: 14.5px; font-weight: 700; vertical-alignment: center; }
-                    Rectangle { horizontal-stretch: 1; background: transparent; }
-                    Rectangle {
-                        width: 24px; height: 24px; border-radius: 7px;
-                        background: close-settings.has-hover ? #F1F3F8 : transparent;
-                        Text { text: "×"; color: Theme.muted; font-size: 17px; horizontal-alignment: center; vertical-alignment: center; }
-                        close-settings := TouchArea { mouse-cursor: pointer; clicked => { root.settings-close(); } }
-                    }
-
-
+                TouchArea {
+                    x: 0px;
+                    y: 0px;
+                    width: parent.width;
+                    height: parent.height;
+                    mouse-cursor: default;
+                    clicked => { root.settings-close(); }
+                    scroll-event(event) => { return accept; }
                 }
 
-                Rectangle { height: 1px; background: #F1F3F8; }
+                settings-card := Rectangle {
+                    changed y => { root.settings-dialog-top = self.y; }
+                    changed height => { root.settings-dialog-height = self.height; }
+                    init => { root.settings-dialog-top = self.y; root.settings-dialog-height = self.height; }
+                    width: 478px;
+                    height: min(max(80px, settings-body.preferred-height) + 134px, root.height - 40px);
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: 16px;
+                    background: white;
+                    border-width: 1px;
+                    border-color: #E6E9F1;
+                    drop-shadow-blur: 34px;
+                    drop-shadow-color: #0F172A38;
 
-                // ---- 网页端口 ----
-                VerticalLayout {
-                    spacing: 5px;
-                    Text { text: "网页端口"; color: Theme.text; font-size: 11.5px; font-weight: 600; }
-                    HorizontalLayout {
-                        spacing: 8px;
-                        Rectangle {
-                            width: 108px;
-                            height: 32px;
-                            border-radius: 9px;
-                            background: Theme.field;
-                            border-width: 1px;
-                            border-color: port-in.has-focus ? #FBC3D3 : #E6E9F1;
+                    TouchArea { width: parent.width; height: parent.height; scroll-event(event) => { return accept; } }
 
-                            port-in := TextInput {
-                                x: 9px;
-                                y: 0;
-                                width: parent.width - 18px;
-                                height: parent.height;
-                                text <=> root.web-port-text;
-                                input-type: number;
-                                single-line: true;
-                                color: Theme.text;
-                                font-size: 11.5px;
-                                vertical-alignment: center;
-                            }
-                        }
-                        Btn {
-                            text: "打开网页";
-                            width: 88px;
-                            small: true;
-                            enabled: root.web-running;
-                            clicked => { root.settings-open-web(); }
-                        }
-                        Btn {
-                            text: root.web-running ? "停止" : "启动";
-                            width: 62px;
-                            small: true;
-                            primary: root.web-running;
-                            clicked => { root.settings-toggle-web(); }
-                        }
-                        Rectangle { horizontal-stretch: 1; background: transparent; }
-                    }
-                    Text { text: root.web-running ? "服务运行中 · " + root.web-address : "服务未运行"; color: Theme.faint; font-size: 9.5px; wrap: word-wrap; }
-                }
-
-                // ---- 翻页间隔 ----
-                VerticalLayout {
-                    spacing: 5px;
-                    Text { text: "翻页间隔（毫秒）"; color: Theme.text; font-size: 11.5px; font-weight: 600; }
-                    HorizontalLayout {
-                        spacing: 8px;
-                        Rectangle {
-                            width: 76px;
-                            height: 32px;
-                            border-radius: 9px;
-                            background: Theme.field;
-                            border-width: 1px;
-                            border-color: delay-in.has-focus ? #FBC3D3 : #E6E9F1;
-
-                            delay-in := TextInput {
-                                x: 9px;
-                                y: 0;
-                                width: parent.width - 18px;
-                                height: parent.height;
-                                text <=> root.page-delay-text;
-                                input-type: number;
-                                single-line: true;
-                                color: Theme.text;
-                                font-size: 11.5px;
-                                vertical-alignment: center;
-                            }
-                        }
-                        Text { text: "~"; color: Theme.faint; font-size: 12px; vertical-alignment: center; }
-                        Rectangle {
-                            width: 76px;
-                            height: 32px;
-                            border-radius: 9px;
-                            background: Theme.field;
-                            border-width: 1px;
-                            border-color: delay-max-in.has-focus ? #FBC3D3 : #E6E9F1;
-
-                            delay-max-in := TextInput {
-                                x: 9px;
-                                y: 0;
-                                width: parent.width - 18px;
-                                height: parent.height;
-                                text <=> root.page-delay-max-text;
-                                input-type: number;
-                                single-line: true;
-                                color: Theme.text;
-                                font-size: 11.5px;
-                                vertical-alignment: center;
-                            }
-                        }
-                        Text {
-                            text: "每翻一页在此区间随机；两值相同或留空相同则固定。越大越不易触发风控，但更慢";
-                            color: Theme.faint;
-                            font-size: 9.5px;
-                            vertical-alignment: center;
-                            wrap: word-wrap;
-                            horizontal-stretch: 1;
-                        }
-                    }
-                }
-
-                // ---- 导出目录 ----
-                VerticalLayout {
-                    spacing: 5px;
-                    Text { text: "导出目录"; color: Theme.text; font-size: 11.5px; font-weight: 600; }
-                    HorizontalLayout {
-                        spacing: 8px;
-                        Rectangle {
-                            height: 32px;
-                            horizontal-stretch: 1;
-                            border-radius: 9px;
-                            background: Theme.field;
-                            border-width: 1px;
-                            border-color: #E6E9F1;
-                            clip: true;
-
-                            Text {
-                                text: root.export-dir-text == "" ? "（默认：应用配置目录下的 exports）" : root.export-dir-text;
-                                color: root.export-dir-text == "" ? #ABB1C0 : Theme.text;
-                                font-size: 10.5px;
-                                x: 9px;
-                                y: 0;
-                                width: parent.width - 18px;
-                                height: parent.height;
-                                vertical-alignment: center;
-                                overflow: elide;
-                            }
-                        }
-                        Btn { text: "选择"; width: 56px; small: true; clicked => { root.settings-pick-dir(); } }
-                        Btn { text: "打开"; width: 56px; small: true; clicked => { root.settings-open-dir(); } }
-                    }
-                }
-
-                // ---- 默认导出 ----
-                HorizontalLayout {
-                    spacing: 12px;
                     VerticalLayout {
-                        spacing: 2px;
-                        horizontal-stretch: 1;
-                        alignment: center;
-                        Text { text: "采集完成后自动导出"; color: Theme.text; font-size: 11.5px; font-weight: 600; }
-                        Text {
-                            text: "按作者 UID 和内容类型分类，每个稿件一个 JSON；重复采集增量合并";
-                            color: Theme.faint;
-                            font-size: 9.5px;
-                            wrap: word-wrap;
+                        padding: 20px;
+                        spacing: 13px;
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Rectangle {
+                                width: 28px;
+                                height: 28px;
+                                border-radius: 9px;
+                                background: #FFF0F5;
+                                Text { text: "设"; color: Theme.accent-dark; font-size: Theme.font-section; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
+                            }
+                            Text { text: "设置"; color: Theme.text; font-size: Theme.font-title; font-weight: 700; vertical-alignment: center; }
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                            Rectangle {
+                                width: 24px; height: 24px; border-radius: 7px;
+                                background: close-settings.has-hover ? #F1F3F8 : transparent;
+                                Text { text: "×"; color: Theme.muted; font-size: Theme.font-icon; horizontal-alignment: center; vertical-alignment: center; }
+                                close-settings := TouchArea { mouse-cursor: pointer; clicked => { root.settings-close(); } }
+                            }
+
+
                         }
-                    }
-                    VerticalLayout {
-                        alignment: center;
-                        Toggle {
-                            checked <=> root.auto-export;
+
+                        Rectangle { height: 1px; background: #F1F3F8; }
+
+                        Rectangle { vertical-stretch: 1; min-height: 80px; clip: true;
+                            settings-scroll := HubScrollView {
+                                width: parent.width; height: parent.height; content-width: self.visible-width;
+                                content-height: max(settings-body.preferred-height, self.visible-height);
+                                settings-body := VerticalLayout {
+                                    width: settings-scroll.visible-width - 12px; height: self.preferred-height;
+                                    spacing: 13px;
+                                    // ---- 网页端口 ----
+                                    VerticalLayout {
+                                        spacing: 5px;
+                                        Text { text: "网页端口"; color: Theme.text; font-size: Theme.font-section; font-weight: 600; }
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            Rectangle {
+                                                width: 108px;
+                                                height: 32px;
+                                                border-radius: 9px;
+                                                background: Theme.field;
+                                                border-width: 1px;
+                                                border-color: port-in.has-focus ? #F7C3D3 : Theme.border;
+
+                                                port-in := TextInput {
+                                                    x: 9px;
+                                                    y: 0;
+                                                    width: parent.width - 18px;
+                                                    height: parent.height;
+                                                    text <=> root.web-port-text;
+                                                    input-type: number;
+                                                    single-line: true;
+                                                    color: Theme.text;
+                                                    font-size: Theme.font-body;
+                                                    vertical-alignment: center;
+                                                }
+                                            }
+                                            Btn {
+                                                text: "打开网页";
+                                                width: 88px;
+                                                small: true;
+                                                enabled: true;
+                                                clicked => { root.settings-open-web(); }
+                                            }
+                                            Btn {
+                                                text: root.web-running ? "停止" : "启动";
+                                                width: 62px;
+                                                small: true;
+                                                primary: root.web-running;
+                                                clicked => { root.settings-toggle-web(); }
+                                            }
+                                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                                        }
+                                        Text { text: root.web-running ? "服务运行中 · " + root.web-address : "服务未运行"; color: Theme.faint; font-size: Theme.font-hint; wrap: word-wrap; }
+                                    }
+
+                                    // ---- 翻页间隔 ----
+                                    VerticalLayout {
+                                        spacing: 5px;
+                                        Text { text: "翻页间隔（毫秒）"; color: Theme.text; font-size: Theme.font-section; font-weight: 600; }
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            Rectangle {
+                                                width: 76px;
+                                                height: 32px;
+                                                border-radius: 9px;
+                                                background: Theme.field;
+                                                border-width: 1px;
+                                                border-color: delay-in.has-focus ? #F7C3D3 : Theme.border;
+
+                                                delay-in := TextInput {
+                                                    x: 9px;
+                                                    y: 0;
+                                                    width: parent.width - 18px;
+                                                    height: parent.height;
+                                                    text <=> root.page-delay-text;
+                                                    input-type: number;
+                                                    single-line: true;
+                                                    color: Theme.text;
+                                                    font-size: Theme.font-body;
+                                                    vertical-alignment: center;
+                                                }
+                                            }
+                                            Text { text: "~"; color: Theme.faint; font-size: Theme.font-body; vertical-alignment: center; }
+                                            Rectangle {
+                                                width: 76px;
+                                                height: 32px;
+                                                border-radius: 9px;
+                                                background: Theme.field;
+                                                border-width: 1px;
+                                                border-color: delay-max-in.has-focus ? #FBC3D3 : #E6E9F1;
+
+                                                delay-max-in := TextInput {
+                                                    x: 9px;
+                                                    y: 0;
+                                                    width: parent.width - 18px;
+                                                    height: parent.height;
+                                                    text <=> root.page-delay-max-text;
+                                                    input-type: number;
+                                                    single-line: true;
+                                                    color: Theme.text;
+                                                    font-size: Theme.font-body;
+                                                    vertical-alignment: center;
+                                                }
+                                            }
+                                            Text {
+                                                text: "每翻一页在此区间随机；两值相同或留空相同则固定。越大越不易触发风控，但更慢";
+                                                color: Theme.faint;
+                                                font-size: Theme.font-hint;
+                                                vertical-alignment: center;
+                                                wrap: word-wrap;
+                                                horizontal-stretch: 1;
+                                            }
+                                        }
+                                    }
+
+                                    // ---- 导出目录 ----
+                                    VerticalLayout {
+                                        spacing: 5px;
+                                        Text { text: "导出目录"; color: Theme.text; font-size: Theme.font-section; font-weight: 600; }
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            Rectangle {
+                                                height: 32px;
+                                                horizontal-stretch: 1;
+                                                border-radius: 9px;
+                                                background: Theme.field;
+                                                border-width: 1px;
+                                                border-color: #E6E9F1;
+                                                clip: true;
+
+                                                Text {
+                                                    text: root.export-dir-text == "" ? "（默认：应用配置目录下的 exports）" : root.export-dir-text;
+                                                    color: root.export-dir-text == "" ? #ABB1C0 : Theme.text;
+                                                    font-size: Theme.font-body;
+                                                    x: 9px;
+                                                    y: 0;
+                                                    width: parent.width - 18px;
+                                                    height: parent.height;
+                                                    vertical-alignment: center;
+                                                    overflow: elide;
+                                                }
+                                            }
+                                            Btn { text: "选择"; width: 56px; small: true; clicked => { root.settings-pick-dir(); } }
+                                            Btn { text: "打开"; width: 56px; small: true; clicked => { root.settings-open-dir(); } }
+                                        }
+                                    }
+
+                                    Rectangle { height: 1px; background: #F1F3F8; }
+                                    Text { text: "离线资源"; color: Theme.text; font-size: Theme.font-section; font-weight: 600; }
+                                    Text { text: "私信图片始终保存；其他消息附件同样始终启用（包含已采集粉丝团）。头像、封面和评论配图默认只保留链接"; color: Theme.faint; font-size: Theme.font-hint; wrap: word-wrap; }
+                                    HorizontalLayout { height: 28px; spacing: 12px; Text { height: 28px; text: "用户头像"; color: Theme.text; font-size: Theme.font-body; vertical-alignment: center; horizontal-stretch: 1; } Toggle { checked <=> root.resource-avatars; enabled: !root.busy; } }
+                                    HorizontalLayout { height: 28px; spacing: 12px; Text { height: 28px; text: "稿件 / 主题封面"; color: Theme.text; font-size: Theme.font-body; vertical-alignment: center; horizontal-stretch: 1; } Toggle { checked <=> root.resource-covers; enabled: !root.busy; } }
+                                    HorizontalLayout { height: 28px; spacing: 12px; Text { height: 28px; text: "评论 / 动态配图"; color: Theme.text; font-size: Theme.font-body; vertical-alignment: center; horizontal-stretch: 1; } Toggle { checked <=> root.resource-content-images; enabled: !root.busy; } }
+                                    Btn { text: "处理资源（使用已保存设置）"; enabled: !root.busy; clicked => { root.process-resources(); } }
+                                }
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: end;
+                            Btn {
+                                text: "保存";
+                                width: 84px;
+                                primary: true;
+                                small: true;
+                                clicked => { root.settings-apply(); }
+                            }
                         }
                     }
                 }
 
-
-                HorizontalLayout {
-                    spacing: 8px;
-                    alignment: end;
-                    Btn {
-                        text: "保存";
-                        width: 84px;
-                        primary: true;
-                        small: true;
-                        clicked => { root.settings-apply(); }
-                    }
-                }
             }
         }
     }
 
     // ================= 扫码登录弹窗 =================
-    Rectangle {
-        visible: root.qr-visible;
-        x: 0px;
-        y: 0px;
-        width: parent.width;
-        height: parent.height;
-        background: #0B12204D;
+    qr-modal := PopupWindow {
+        x: 0px; y: 0px; width: root.width; height: root.height;
+        close-policy: no-auto-close; forward-focus: qr-modal-focus;
+        qr-modal-focus := FocusScope {
+            width: parent.width; height: parent.height;
+            key-pressed(event) => {
+                if event.text == Key.Tab { return reject; }
+                if event.text == Key.Escape { root.qr-cancel(); return accept; }
+                return accept;
+            }
+            Rectangle {
 
-        Rectangle {
-            width: 380px;
-            height: 462px;
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            border-radius: 16px;
-            background: white;
-            border-width: 1px;
-            border-color: #FFE1EB;
-            drop-shadow-blur: 34px;
-            drop-shadow-color: #0F172A38;
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                height: parent.height;
+                background: #0B12204D;
 
-            VerticalLayout {
-                padding: 20px;
-                spacing: 10px;
-
-                HorizontalLayout {
-                    spacing: 8px;
-                    Rectangle {
-                        width: 28px;
-                        height: 28px;
-                        border-radius: 9px;
-                        background: #FFF0F5;
-                        Text { text: "扫"; color: Theme.accent-dark; font-size: 13px; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
-                    }
-                    Text {
-                        text: "扫码登录";
-                        color: Theme.text;
-                        font-size: 14.5px;
-                        font-weight: 700;
-                        vertical-alignment: center;
-                    }
-                    Rectangle { horizontal-stretch: 1; background: transparent; }
-                    Text {
-                        text: "一次拿全 Cookie";
-                        color: Theme.faint;
-                        font-size: 10px;
-                        vertical-alignment: center;
-                    }
-                }
-
+                TouchArea { width: parent.width; height: parent.height; scroll-event(event) => { return accept; } }
                 Rectangle {
-                    height: 238px;
-                    border-radius: 12px;
-                    background: Theme.field;
+                    width: 380px;
+                    height: 462px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: 16px;
+                    background: white;
                     border-width: 1px;
-                    border-color: #E6E9F1;
+                    border-color: #FFE1EB;
+                    drop-shadow-blur: 34px;
+                    drop-shadow-color: #0F172A38;
 
-                    Image {
-                        source: root.qr-image;
-                        width: 226px;
-                        height: 226px;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                        image-fit: contain;
-                        visible: !root.qr-empty;
-                    }
+                    VerticalLayout {
+                        padding: 20px;
+                        spacing: 10px;
 
-                    Text {
-                        text: "正在获取二维码…";
-                        visible: root.qr-empty;
-                        color: Theme.faint;
-                        font-size: 11.5px;
-                        width: parent.width;
-                        height: parent.height;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Rectangle {
+                                width: 28px;
+                                height: 28px;
+                                border-radius: 9px;
+                                background: #FFF0F5;
+                                Text { text: "扫"; color: Theme.accent-dark; font-size: Theme.font-section; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
+                            }
+                            Text {
+                                text: "扫码登录";
+                                color: Theme.text;
+                                font-size: Theme.font-title;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                            }
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                            Text {
+                                text: "一次拿全 Cookie";
+                                color: Theme.faint;
+                                font-size: Theme.font-hint;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        Rectangle {
+                            height: 238px;
+                            border-radius: 12px;
+                            background: Theme.field;
+                            border-width: 1px;
+                            border-color: #E6E9F1;
+
+                            Image {
+                                source: root.qr-image;
+                                width: 226px;
+                                height: 226px;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                image-fit: contain;
+                                visible: !root.qr-empty;
+                            }
+
+                            Text {
+                                text: "正在获取二维码…";
+                                visible: root.qr-empty;
+                                color: Theme.faint;
+                                font-size: Theme.font-body;
+                                width: parent.width;
+                                height: parent.height;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        Text {
+                            text: root.qr-status;
+                            color: Theme.accent-dark;
+                            font-size: Theme.font-body;
+                            font-weight: 600;
+                            horizontal-alignment: center;
+                            width: parent.width;
+                        }
+
+                        Text {
+                            text: "打开 B 站手机客户端，依次进入「我的」、右上角「扫一扫」。扫码后会拿到 SESSDATA、bili_jct、DedeUserID 与 buvid3/4 整套凭据，保存在本机配置里。";
+                            color: Theme.faint;
+                            font-size: Theme.font-hint;
+                            wrap: word-wrap;
+                        }
+
+                        Rectangle { vertical-stretch: 1; background: transparent; }
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Btn {
+                                text: "换个二维码";
+                                width: 104px;
+                                small: true;
+                                clicked => { root.qr-login(); }
+                            }
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                            Btn {
+                                text: "取消";
+                                width: 80px;
+                                small: true;
+                                primary: true;
+                                clicked => { root.qr-cancel(); }
+                            }
+                        }
                     }
                 }
 
-                Text {
-                    text: root.qr-status;
-                    color: Theme.accent-dark;
-                    font-size: 12px;
-                    font-weight: 600;
-                    horizontal-alignment: center;
-                    width: parent.width;
-                }
-
-                Text {
-                    text: "打开 B 站手机客户端 → 我的 → 右上角「扫一扫」。扫码后会拿到 SESSDATA、bili_jct、DedeUserID 与 buvid3/4 整套凭据，保存在本机配置里。";
-                    color: Theme.faint;
-                    font-size: 10px;
-                    wrap: word-wrap;
-                }
-
-                Rectangle { vertical-stretch: 1; background: transparent; }
-
-                HorizontalLayout {
-                    spacing: 8px;
-                    Btn {
-                        text: "换个二维码";
-                        width: 104px;
-                        small: true;
-                        clicked => { root.qr-login(); }
-                    }
-                    Rectangle { horizontal-stretch: 1; background: transparent; }
-                    Btn {
-                        text: "取消";
-                        width: 80px;
-                        small: true;
-                        primary: true;
-                        clicked => { root.qr-cancel(); }
-                    }
-                }
             }
         }
     }
     // Modal alerts stay above settings and block accidental background clicks.
-    Rectangle {
-        visible: root.alert-visible;
-        width: parent.width; height: parent.height; background: #0B122066;
-        TouchArea { }
+    alert-modal := PopupWindow {
+        x: 0px; y: 0px; width: root.width; height: root.height;
+        close-policy: no-auto-close; forward-focus: alert-modal-focus;
+        alert-modal-focus := FocusScope {
+            width: parent.width; height: parent.height;
+            key-pressed(event) => {
+                if event.text == Key.Tab { return reject; }
+                if event.text == Key.Escape { root.alert-visible = false; return accept; }
+                return accept;
+            }
+            Rectangle {
+
+                width: parent.width; height: parent.height; background: #0B122066;
+                TouchArea { width: parent.width; height: parent.height; scroll-event(event) => { return accept; } }
+                Rectangle {
+                    width: 360px; height: 162px;
+                    x: (parent.width - self.width)/2; y: (parent.height - self.height)/2;
+                    background: white; border-radius: 14px;
+                    VerticalLayout {
+                        padding: 20px; spacing: 12px;
+                        Text { text: "提示"; color: Theme.text; font-size: Theme.font-title; font-weight: 700; }
+                        Text { text: root.alert-text; color: Theme.muted; font-size: Theme.font-body; wrap: word-wrap; vertical-stretch: 1; }
+                        HorizontalLayout {
+                            alignment: end;
+                            Btn { text: "确定"; width: 76px; small: true; primary: true; clicked => { root.alert-visible = false; } }
+                        }
+                    }
+                }
+
+            }
+        }
+    }
+
+    // Confirm before enabling potentially long-running fan-group collection.
+    groups-modal := PopupWindow {
+        x: 0px; y: 0px; width: root.width; height: root.height;
+        close-policy: no-auto-close; forward-focus: groups-modal-focus;
+        groups-modal-focus := FocusScope {
+            width: parent.width; height: parent.height;
+            key-pressed(event) => {
+                if event.text == Key.Tab { return reject; }
+                if event.text == Key.Escape { root.message-groups-confirm = false; return accept; }
+                return accept;
+            }
+            Rectangle {
+
+                width: parent.width; height: parent.height; background: #0B122066;
+                TouchArea { width: parent.width; height: parent.height; clicked => { root.message-groups-confirm = false; } scroll-event(event) => { return accept; } }
+                Rectangle {
+                    width: 400px; height: 190px;
+                    x: (parent.width - self.width)/2; y: (parent.height - self.height)/2;
+                    background: white; border-radius: 14px;
+                    TouchArea { width: parent.width; height: parent.height; scroll-event(event) => { return accept; } }
+                    VerticalLayout {
+                        padding: 20px; spacing: 12px;
+                        HorizontalLayout {
+                            Text { text: "采集粉丝团"; color: Theme.text; font-size: Theme.font-title; font-weight: 700; horizontal-stretch: 1; vertical-alignment: center; }
+                            Btn { text: "×"; width: 32px; small: true; clicked => { root.message-groups-confirm = false; } }
+                        }
+                        Text { text: "粉丝团消息量可能较大，采集可能需要很久。是否继续勾选？"; color: Theme.muted; font-size: Theme.font-body; wrap: word-wrap; vertical-stretch: 1; }
+                        HorizontalLayout {
+                            alignment: LayoutAlignment.end;
+                            Btn { text: "取消"; width: 76px; small: true; clicked => { root.message-groups-confirm = false; } }
+                            Btn { text: "继续勾选"; width: 100px; small: true; primary: true; enabled: !root.busy; clicked => { root.message-groups = true; root.message-groups-confirm = false; } }
+                        }
+                    }
+                }
+
+            }
+        }
+    }
+
+    // ================= 风控弹窗 =================
+    verify-modal := PopupWindow {
+        x: 0px; y: 0px; width: root.width; height: root.height;
+        close-policy: no-auto-close; forward-focus: verify-focus;
         Rectangle {
-            width: 360px; height: 162px;
-            x: (parent.width - self.width)/2; y: (parent.height - self.height)/2;
-            background: white; border-radius: 14px;
-            VerticalLayout {
-                padding: 20px; spacing: 12px;
-                Text { text: "提示"; color: Theme.text; font-size: 15px; font-weight: 700; }
-                Text { text: root.alert-text; color: Theme.muted; font-size: 12px; wrap: word-wrap; vertical-stretch: 1; }
-                HorizontalLayout {
-                    alignment: end;
-                    Btn { text: "确定"; width: 76px; small: true; primary: true; clicked => { root.alert-visible = false; } }
+
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            background: #0B12204D;
+
+            verify-focus := FocusScope {
+                width: parent.width; height: parent.height;
+                key-pressed(event) => {
+                    if event.text == Key.Tab { return reject; }
+                    if event.text == Key.Return || event.text == Key.Space {root.verify-dismiss();}
+                    return accept;
+                }
+                TouchArea {
+                    width: parent.width; height: parent.height; mouse-cursor: default;
+                    clicked => {verify-focus.focus();}
+                    scroll-event(event) => {return accept;}
+                }
+
+                Rectangle {
+                    width: 440px;
+                    height: 214px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: 16px;
+                    background: white;
+                    border-width: 1px;
+                    border-color: #FFE1EB;
+                    drop-shadow-blur: 34px;
+                    drop-shadow-color: #0F172A38;
+
+                    VerticalLayout {
+                        padding: 20px;
+                        spacing: 8px;
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Rectangle {
+                                width: 28px;
+                                height: 28px;
+                                border-radius: 9px;
+                                background: #FFF0F5;
+                                Text { text: "!"; color: Theme.accent-dark; font-size: Theme.font-title; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
+                            }
+                            Text {
+                                text: root.verify-title;
+                                color: Theme.text;
+                                font-size: Theme.font-title;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        Text {
+                            text: root.verify-text;
+                            color: Theme.muted;
+                            font-size: Theme.font-body;
+                            wrap: word-wrap;
+                        }
+
+                        Text {
+                            text: root.verify-secs > 0
+                            ? (root.progress-text == ""
+                            ? ("剩余 " + root.verify-secs + " 秒")
+                            : ("剩余 " + root.verify-secs + " 秒 · " + root.progress-text))
+                            : (root.progress-text == "" ? "正在检查接口是否恢复…" : ("正在检查接口是否恢复 · " + root.progress-text));
+                            color: Theme.accent-dark;
+                            font-size: Theme.font-body;
+                            font-weight: 600;
+                        }
+
+                        Text {
+                            text: "倒计时结束后重试原请求；请求与分页确认恢复后自动关闭。点赞明细持续停滞时暂缓当前通知并继续。";
+                            color: Theme.faint;
+                            font-size: Theme.font-hint;
+                            wrap: word-wrap;
+                        }
+
+                        Rectangle { vertical-stretch: 1; background: transparent; }
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: end;
+                            Btn {
+                                text: "后台继续等";
+                                width: 96px;
+                                small: true;
+                                clicked => { root.verify-dismiss(); }
+                            }
+                        }
+                    }
                 }
             }
+
         }
     }
 

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Bili library identity v1",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "library_id"
+  ],
+  "properties": {
+    "format": {
+      "const": "bili-comment-hub-library"
+    },
+    "version": {
+      "const": 1
+    },
+    "library_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    }
+  },
+  "additionalProperties": false
+}

@@ -23,6 +23,12 @@ pub fn data_dir() -> Result<PathBuf> {
         .ok_or_else(|| anyhow::anyhow!("找不到应用配置目录"))
 }
 
+pub fn root_dir() -> Result<PathBuf> {
+    let root=crate::library::state_dir("checkpoints")?;
+    crate::library::migrate_comment_tasks(&root)?;
+    Ok(root)
+}
+
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Cursor {
     pub offset: String,
@@ -59,7 +65,7 @@ pub fn key(v: &Video) -> String {
 impl Task {
     pub fn new(uid: u64, ranges: collection::Ranges, replies: bool, targets: Vec<Video>) -> Self {
         Self {
-            version: 2,
+            version: 3,
             uid,
             mode: if targets.is_empty() {
                 "all"
@@ -109,7 +115,7 @@ impl Task {
             .join(format!("{}.json", self.id()))
     }
     pub fn path(&self) -> Result<PathBuf> {
-        Ok(self.path_in(&data_dir()?.join("checkpoints")))
+        Ok(self.path_in(&root_dir()?))
     }
     pub fn save_to(&self, path: &Path) -> Result<()> {
         secure::write_config(path, &serde_json::to_value(self)?)
@@ -119,12 +125,12 @@ impl Task {
     }
     pub fn load(path: &Path) -> Result<Self> {
         let value: serde_json::Value = serde_json::from_slice(&std::fs::read(path)?)?;
-        if value["version"].as_u64() != Some(2) {
-            bail!("旧版 50 条一批的断点不兼容，原文件已保留");
+        if value["version"].as_u64() != Some(3) {
+            bail!("旧断点与新版归档不兼容，原文件已保留；请重新开始采集");
         }
         let task: Self = serde_json::from_value(value)?;
         collection::validate(&task.ranges, false)?;
-        if task.version != 2 || task.uid == 0 || task.page_size != collection::PAGE_SIZE {
+        if task.version != 3 || task.uid == 0 || task.page_size != collection::PAGE_SIZE {
             bail!("不支持的采集进度");
         }
         Ok(task)
@@ -221,7 +227,7 @@ pub struct Discovery {
     pub notices: Vec<String>,
 }
 pub fn latest(uid: u64, ranges: &collection::Ranges, replies: bool) -> Result<Discovery> {
-    latest_in(&data_dir()?.join("checkpoints"), uid, ranges, replies)
+    latest_in(&root_dir()?, uid, ranges, replies)
 }
 pub fn latest_in(
     root: &Path,
@@ -413,18 +419,19 @@ mod independent_range_tests {
     }
 }
 
-
 #[cfg(test)]
 mod page_boundary_tests {
     use super::*;
 
     fn rows(ty: u32, page: u64, count: usize) -> Vec<bili::CommentRow> {
-        (0..count).map(|i| bili::CommentRow {
-            ty,
-            oid: 42,
-            rpid: page * 100 + i as u64,
-            ..Default::default()
-        }).collect()
+        (0..count)
+            .map(|i| bili::CommentRow {
+                ty,
+                oid: 42,
+                rpid: page * 100 + i as u64,
+                ..Default::default()
+            })
+            .collect()
     }
 
     #[test]

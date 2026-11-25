@@ -1,0 +1,24 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),path=require('node:path');
+const script=fs.readFileSync(path.join(__dirname,'../web/messages.js'),'utf8');
+const nodes=new Map();const node=id=>{if(!nodes.has(id))nodes.set(id,{value:'',innerHTML:'',insertAdjacentHTML(_,html){this.innerHTML+=html},textContent:'',querySelectorAll(){return []}});return nodes.get(id)};
+const document={addEventListener(){}};const root={querySelector:id=>node(id.replace('#m-','')),querySelectorAll(){return []}};
+let uid='1',releaseSummary;const requests=[];const window={document};
+const ctx=vm.createContext({window,console,URL,URLSearchParams,setTimeout,clearTimeout,fetch:async url=>{requests.push(url);if(url.endsWith('/summary')&&uid==='1')await new Promise(resolve=>releaseSummary=resolve);return {ok:true,json:async()=>url.includes('/summary')?{account_uid:uid,counts:{private:0,groups:0,likes:0,replies:0,mentions:0},sessions:[],attachments_saved:0,attachments_pending:0}:{account_uid:uid,total:150,items:Array.from({length:50},(_,i)=>({id:String(Number(new URL(url,'http://local').searchParams.get('offset'))+i),type:'private',text:'message',raw:{}}))}}}});
+vm.runInContext(script,ctx);
+(async()=>{
+ const workspace=window.createMessagesWorkspace({root,head:{querySelector(){return null},querySelectorAll(){return []}},url:()=>new URL('http://localhost/messages'),active:()=>true});
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(node('page').textContent.includes('50 / 150'),true,'first page renders while metadata is waiting');
+ const firstPage=node('items').innerHTML;
+ releaseSummary();await workspace.ready;
+ assert.equal(node('items').innerHTML,firstPage,'late metadata preserves the loaded first page');
+ await node('more').onclick();await new Promise(r=>setImmediate(r));assert(requests.at(-1).includes('offset=50'));
+ node('items').innerHTML='expanded detail and selection';node('q').value='unfinished input';
+ requests.length=0;await workspace.activate();
+ assert.deepEqual(requests,['/api/messages/summary?identity=1']);assert.equal(node('items').innerHTML,'expanded detail and selection');assert.equal(node('q').value,'unfinished input');assert.equal(node('more').hidden,false);
+ uid='2';requests.length=0;await workspace.activate();
+ assert.equal(requests[0],'/api/messages/summary?identity=1');assert(requests.includes('/api/messages/summary'));assert.equal(requests.filter(url=>url.includes('/items?')).length,1);assert(requests.find(url=>url.includes('/items?')).includes('offset=0'));assert.equal(node('page').textContent.includes('50 / 150'),true);assert.notEqual(node('items').innerHTML,'expanded detail and selection');
+ node('items').innerHTML='old account data';const switching=workspace.accountChanged('3');assert.equal(node('items').innerHTML,'');await switching;assert.equal(node('items').innerHTML,'','mismatching summary must not restore old account data');
+ uid='3';await workspace.refresh();assert.notEqual(node('items').innerHTML,'old account data');
+ console.log('PASS: same-account activation retains message DOM, draft and page; changed account reloads and resets page');
+})().catch(e=>{console.error(e);process.exitCode=1});

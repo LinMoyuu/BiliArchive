@@ -1,0 +1,34 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),path=require('node:path');
+const repo=path.join(__dirname,'..'),source=fs.readFileSync(path.join(repo,'web/messages.js'),'utf8').replace(/\r\n/g,'\n').match(/BEGIN WORKSPACE LOGIC\n([\s\S]*?)\n\/\/ END WORKSPACE LOGIC/)[1];
+const nodes=new Map(),requests=[];const node=id=>{if(!nodes.has(id))nodes.set(id,{value:'',querySelectorAll(){return[]}});return nodes.get(id)};
+const ctx=vm.createContext({URL,URLSearchParams,setTimeout,clearTimeout,location:{href:'http://localhost/messages'},document:{getElementById:node,querySelectorAll(){return[]}},fetch:async url=>{requests.push(url);return new Promise(()=>{})}});vm.runInContext(source,ctx);const run=s=>vm.runInContext(s,ctx);
+
+const make=(native,url='https://www.bilibili.com/video/av170001',item_id='99')=>({id:'999999',type:'likes',url,raw:{item:{type:'reply',native_uri:native,item_id,title:'被赞评论 <text>'}},attachments:[]});
+const destination=i=>{ctx.item=i;return run('likeTarget(item).url')};
+assert.equal(destination(make('bilibili://video/116644617717979?comment_root_id=300986161089&comment_secondary_id=304227065552')),'https://www.bilibili.com/video/BV1NqGk6wEmS/#reply304227065552');
+assert.equal(destination(make('bilibili://video/170001?comment_root_id=42')),'https://www.bilibili.com/video/BV17x411w7KC/#reply42');
+assert.equal(destination(make('bilibili://video/170001')),'https://www.bilibili.com/video/BV17x411w7KC/#reply99');
+const comment=(enter,params='anchor=18446744073709551614')=>'bilibili://comment/detail/11/379458747/286792262336/?'+params+'&enterUri='+encodeURIComponent(enter);
+assert.equal(destination(make(comment('bilibili://opus/detail/1151478503002079271'))),'https://www.bilibili.com/opus/1151478503002079271?comment_on=1#reply18446744073709551614');
+assert.equal(destination(make(comment('bilibili://following/detail/42',''))),'https://www.bilibili.com/opus/42?comment_on=1#reply286792262336');
+assert.equal(destination(make(comment('bilibili://following/detail?dynamic_id=42','comment_secondary_id=777&anchor=888&comment_root_id=999'))),'https://www.bilibili.com/opus/42?comment_on=1#reply777');
+assert.equal(destination(make(comment('bilibili://article/11777977'))),'https://www.bilibili.com/read/cv11777977#reply18446744073709551614');
+assert.equal(destination(make(comment('bilibili://video/170001'))),'https://www.bilibili.com/video/BV17x411w7KC/#reply18446744073709551614');
+assert.equal(destination(make(comment('bilibili://opus/detail/42','anchor=bad&anchor=22'))),'https://www.bilibili.com/opus/42?comment_on=1#reply286792262336');
+assert.equal(destination(make(comment('javascript:alert(1)'),'https://t.bilibili.com/42?foo=bar')),'https://t.bilibili.com/42?foo=bar&comment_on=1#reply18446744073709551614');
+assert.equal(destination(make('', 'https://www.bilibili.com/video/av170001#reply123',456)),'https://www.bilibili.com/video/av170001#reply123');
+assert.equal(destination(make('', 'https://www.bilibili.com/video/av170001',456)),'https://www.bilibili.com/video/av170001#reply456');
+for(const invalid of [null,0,-1,1.5,Number.MAX_SAFE_INTEGER+1,'0','-1','1e3','<script>'])assert.equal(destination(make('', 'https://www.bilibili.com/video/av170001',invalid)),'https://www.bilibili.com/video/av170001');
+assert.equal(destination(make('', 'https://b23.tv/example','456')),'https://b23.tv/example');
+assert.equal(destination(make(comment('javascript:bad'),'javascript:bad')),'');
+assert.equal(destination(make(comment('https://www.bilibili.com.evil.test/opus/42'),'file:///secret')),'');
+const fixture=make(comment('bilibili://opus/detail/42'));ctx.fixture=fixture;const original=JSON.stringify(fixture),count=requests.length;
+run('likeTarget(fixture)');assert.equal(JSON.stringify(fixture),original);assert.equal(requests.length,count);
+assert.equal(run('notificationDestination(fixture).url'),fixture.url,'other notification route behavior is unchanged');
+const video={...fixture,raw:{item:{type:'video',native_uri:'bilibili://video/170001?comment_root_id=42',uri:'https://www.bilibili.com/video/av170001'}}};assert.equal(destination(video),fixture.url,'non-comment likes keep their current topic URL');
+console.log('PASS: video/root/secondary liked comments, opus/following/article app routes, precise comment IDs, large IDs, fallback, safe protocols, immutable archives and unchanged other notification routes');
+
+const missing=make('');delete missing.raw.item.item_id;assert.equal(destination(missing),missing.url);
+assert.equal(destination(make(comment('','anchor=777'),'https://www.bilibili.com/opus/42','99')),'https://www.bilibili.com/opus/42?comment_on=1#reply777');
+assert.equal(destination(make(comment('not a URL','anchor=777'),'https://www.bilibili.com/opus/42','99')),'https://www.bilibili.com/opus/42?comment_on=1#reply777');
+assert.equal(destination(make(comment('','anchor=777'),'','99')),'');

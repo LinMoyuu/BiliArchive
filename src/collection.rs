@@ -137,7 +137,7 @@ mod tests {
 
 /// Correct numeric input against the current type's known page limit.
 pub fn corrected_bounds(from: &str, to: &str, limit: Option<u64>) -> (String,String) {
-    if limit==Some(0) {return ("1".into(),String::new());}
+    if limit==Some(0) {return (String::new(),String::new());}
     let from=from.trim();let to=to.trim();
     let start=from.parse::<u64>().ok().map(|n|n.max(1));
     let start=start.map(|n|limit.map(|max|n.min(max)).unwrap_or(n));
@@ -164,7 +164,7 @@ mod corrected_bounds_tests {
         assert_eq!(corrected_bounds("3","2",Some(7)),("3".into(),"3".into()));
         assert_eq!(corrected_bounds("1","999",None),("1".into(),"999".into()));
         assert_eq!(corrected_bounds("1","",Some(7)),("1".into(),"".into()));
-        assert_eq!(corrected_bounds("99","999",Some(0)),("1".into(),"".into()));
+        assert_eq!(corrected_bounds("99","999",Some(0)),("".into(),"".into()));
         assert_eq!(corrected_bounds("1","9999999999999999999999999",Some(7)),("1".into(),"7".into()));
     }
 }

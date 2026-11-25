@@ -1,0 +1,51 @@
+{
+  "format": "bili-archive",
+  "version": 1,
+  "meta": {
+    "account_uid": "12",
+    "app_version": "1.0.0",
+    "exported_at": "2026-11-24T12:00:00+08:00"
+  },
+  "source": {
+    "type": "messages"
+  },
+  "users": {
+    "2": {
+      "uid": "2",
+      "name": "示例用户",
+      "avatar_resource_id": ""
+    }
+  },
+  "subjects": {},
+  "sessions": [],
+  "items": [
+    {
+      "id": "18446744073709551614",
+      "type": "replies",
+      "session_key": "",
+      "subject_key": null,
+      "sender_uid": "2",
+      "actor_name": "示例用户",
+      "text": "示例消息",
+      "timestamp": 1700000000,
+      "url": "",
+      "native_uri": null,
+      "status": 0,
+      "like_count": 0,
+      "like_users": [],
+      "like_detail": {
+        "status": "pending",
+        "error": ""
+      },
+      "resource_ids": [],
+      "raw": {}
+    }
+  ],
+  "resources": {},
+  "collection": {
+    "status": "partial",
+    "archived_total": 1,
+    "reported_total": null,
+    "exhausted": null
+  }
+}

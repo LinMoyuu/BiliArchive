@@ -1,8 +1,8 @@
 [package]
-name = "bili-comment-hub"
+name = "biliarchive"
 version = "1.0.0"
 edition = "2021"
-description = "把哔哩哔哩创作中心的评论整合导出为 JSON 的桌面工具"
+description = "归档哔哩哔哩稿件评论、私信和互动通知的桌面工具"
 
 [dependencies]
 slint = "1.19.0"
@@ -19,6 +19,8 @@ webbrowser = "1"
 qrcode = { version = "0.15.0", default-features = false, features = ["std"] }
 
 tempfile = "3"
+flate2 = "1"
+crc32fast = "1"
 
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 keyring = { version = "=4.2.0", features = ["v1"] }

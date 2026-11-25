@@ -1,0 +1,17 @@
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+const root=path.join(__dirname,'..'),read=p=>fs.readFileSync(path.join(root,p),'utf8');
+const main=read('src/main.rs'),library=read('src/library.rs'),offline=read('src/offline.rs'),paging=read('src/messages_paging.rs'),messages=read('src/messages.rs'),native=read('src/messages_ui.rs'),web=read('src/web.rs'),ui=read('ui/app.slint'),zip=read('src/portable_zip.rs');
+assert(!main.includes('last_dir'));assert(!/archive_root:\s*String/.test(messages.match(/struct Task \{[\s\S]*?\n\}/)[0]));assert(!/archive_root:\s*String/.test(paging.match(/struct Registry \{[\s\S]*?\n\}/)[0]));assert(messages.includes('library_id: String'));assert(paging.includes('library_id: String'));
+for(const item of ['bili-comment-hub-library','.library.json','create_new(true)','backup_remove','state_matches'])assert(library.includes(item));
+assert(library.includes('migrations/legacy-state'));assert(library.includes('migrate_comment_tasks'));assert(main.includes('offline::has_saved_selection()'));assert(main.includes('Action::Restore'));
+assert(main.includes('shared.offline.load'));assert(native.includes('Action::Collect(..) | Action::RetryNg(_)'));
+for(const action of ['offline-import-file','offline-import-folder','offline-export','offline-choose'])assert(ui.includes(action));
+assert(ui.includes('root.offline ? TextWrap.char-wrap'));assert(ui.includes('root.name + " · 本地"'));assert(ui.includes('!root.account-offline'));
+assert(offline.includes('ResourceCopies::default()'));assert(offline.includes('resource_copies.finish()?'));assert(offline.includes('保留本机已有进度'));assert(offline.includes('备份')||library.includes('备份'));
+assert(offline.includes('rename(&target, &destination)'));assert(offline.includes('source_manifest'));assert(offline.includes('state_allowed'));assert(offline.includes('portable_zip::create'));assert(offline.includes('portable_zip::extract'));
+assert(web.includes('Content-Security-Policy: img-src'));assert(web.includes('crate::library::offline()'));assert(web.includes('message_doc.summary()'));
+for(const check of ['crc32fast::Hasher','DeflateDecoder','create_new(true)','expected_crc','符号链接','ZIP64'])assert(zip.includes(check));
+assert(zip.includes('reserved('));assert(zip.includes('0x02014b50'));assert(zip.includes('0x06054b50'));
+const schema=JSON.parse(read('schemas/library-v1.schema.json')),sample=JSON.parse(read('docs/examples/library.json'));
+assert.equal(sample.format,schema.properties.format.const);assert.equal(sample.version,1);assert(new RegExp(schema.properties.library_id.pattern).test(sample.library_id));assert(!JSON.stringify(sample).includes('archive_root'));
+console.log('PASS: offline library menu/restore, anonymous resource capability, stable ID scopes, last_dir removal, guarded state migration, non-overwriting import, package allowlist and library manifest contract');

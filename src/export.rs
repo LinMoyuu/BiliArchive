@@ -1,290 +1,34 @@
-use crate::model::{ArchiveDoc, Comment, Reply, Video};
+use crate::model::{ArchiveDoc, Video};
 use anyhow::{anyhow, Result};
-use serde_json::Value;
 use std::path::Path;
 
 /// 导出为 JSON（唯一格式）。
 /// 评论是主评论挂楼中楼的层级树，JSON 天然贴合；文本里常见的引号 / 反斜杠 / emoji
 /// 按 JSON 规则转义即可，消费方（网页、脚本、表格）拿到就能直接读。
 pub fn to_json(doc: &ArchiveDoc) -> Result<String> {
-    Ok(serde_json::to_string_pretty(doc)?)
-}
-
-/// 从任意来源的 JSON 中提取视频与评论：
-/// 1) 本工具导出的文档  2) 浏览器里抓到的接口响应  3) 裸的 replies 数组
-pub fn import_json(text: &str, fallback_name: &str) -> Result<Vec<Video>> {
-    let v: Value = serde_json::from_str(text).map_err(|e| anyhow!("JSON 解析失败：{}", e))?;
-    import_value(v, fallback_name)
-}
-
-pub fn import_value(v: Value, fallback_name: &str) -> Result<Vec<Video>> {
-    // 1) 本工具格式
-    if let Some(list) = v.get("videos").and_then(|x| x.as_array()) {
-        let mut out = Vec::new();
-        for item in list {
-            if let Ok(mut video) = serde_json::from_value::<Video>(item.clone()) {
-                if video.aid == 0 {
-                    video.aid = guess_aid(item);
-                }
-                if video.title.is_empty() {
-                    video.title = fallback_name.to_string();
-                }
-                if video.url.is_empty() {
-                    video.url = Video::url_for(&video.bvid, video.aid);
-                }
-                out.push(video);
-            }
-        }
-        if !out.is_empty() {
-            return Ok(out);
-        }
-    }
-
-    // 2) 接口响应：{ code, data: { replies: [...], top_replies, cursor } }
-    if let Some(data) = v.get("data") {
-        if data.get("replies").is_some() || data.get("top_replies").is_some() {
-            return Ok(vec![video_from_api(data, fallback_name)]);
-        }
-    }
-
-    // 3) 裸数组
-    if let Some(arr) = v.as_array() {
-        let wrapped = serde_json::json!({ "replies": arr });
-        return Ok(vec![video_from_api(&wrapped, fallback_name)]);
-    }
-
-    Err(anyhow!("无法识别的 JSON 结构"))
-}
-
-fn guess_aid(v: &Value) -> u64 {
-    v.get("aid")
-        .and_then(|x| x.as_u64())
-        .or_else(|| {
-            v.get("comments")
-                .and_then(|c| c.as_array())
-                .and_then(|a| a.first())
-                .and_then(|c| c.get("oid"))
-                .and_then(|x| x.as_u64())
-        })
-        .unwrap_or(0)
-}
-
-fn video_from_api(data: &Value, fallback_name: &str) -> Video {
-    let mut video = Video::default();
-    let mut seen: Vec<u64> = Vec::new();
-
-    for key in ["top_replies", "replies"] {
-        if let Some(list) = data.get(key).and_then(|x| x.as_array()) {
-            for item in list {
-                let rpid = item.get("rpid").and_then(|x| x.as_u64()).unwrap_or(0);
-                if rpid == 0 || seen.contains(&rpid) {
-                    continue;
-                }
-                seen.push(rpid);
-                if video.aid == 0 {
-                    video.aid = item.get("oid").and_then(|x| x.as_u64()).unwrap_or(0);
-                }
-                if let Some(c) = comment_from_value(item, key == "top_replies") {
-                    video.comments.push(c);
-                }
-            }
-        }
-    }
-    if video.aid == 0 {
-        video.aid = guess_aid(data);
-    }
-    video.title = fallback_name.to_string();
-    video.url = Video::url_for(&video.bvid, video.aid);
-    video.comment_total = video.comments.len() as u64;
-    video.comments.sort_by(|a, b| {
-        b.is_pinned
-            .cmp(&a.is_pinned)
-            .then_with(|| b.ctime.cmp(&a.ctime))
-    });
-    video
-}
-
-fn avatar_of(member: &Value) -> String {
-    let raw = member
-        .get("avatar")
-        .and_then(|x| x.as_str())
-        .filter(|s| !s.trim().is_empty())
-        .or_else(|| member.get("face").and_then(|x| x.as_str()))
-        .unwrap_or("")
-        .trim();
-    match raw.strip_prefix("http://") {
-        Some(rest) => format!("https://{}", rest),
-        None => raw.to_string(),
-    }
-}
-
-fn is_vip_of(member: &Value) -> bool {
-    let vip = member.get("vip");
-    match vip {
-        Some(v) => {
-            v.get("vipStatus").and_then(|x| x.as_i64()).unwrap_or(0) == 1
-                || v.get("vipType").and_then(|x| x.as_i64()).unwrap_or(0) > 0
-                || v.get("accessStatus").and_then(|x| x.as_i64()).unwrap_or(0) == 1
-        }
-        None => false,
-    }
-}
-
-fn location_of(v: &Value) -> String {
-    let raw = v
-        .get("reply_control")
-        .and_then(|c| c.get("location").or_else(|| c.get("ip_location")))
-        .and_then(|x| x.as_str())
-        .unwrap_or("")
-        .trim();
-    raw.trim_start_matches("IP属地")
-        .trim_start_matches(['：', ':', ' '])
-        .trim()
-        .to_string()
-}
-
-fn pictures_of(v: &Value) -> Vec<String> {
-    v.get("content")
-        .and_then(|c| c.get("pictures"))
-        .and_then(|p| p.as_array())
-        .map(|list| {
-            list.iter()
-                .filter_map(|p| {
-                    let src = p
-                        .get("img_src")
-                        .or_else(|| p.get("img_url"))
-                        .and_then(|x| x.as_str())
-                        .unwrap_or("")
-                        .trim();
-                    if src.is_empty() {
-                        None
-                    } else {
-                        Some(match src.strip_prefix("http://") {
-                            Some(rest) => format!("https://{}", rest),
-                            None => src.to_string(),
-                        })
-                    }
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn comment_from_value(v: &Value, pinned: bool) -> Option<Comment> {
-    let rpid = v.get("rpid").and_then(|x| x.as_u64())?;
-    let member = v.get("member")?;
-    let content = v
-        .get("content")
-        .and_then(|c| c.get("message"))
-        .and_then(|m| m.as_str())
-        .unwrap_or("")
-        .to_string();
-    let pictures = pictures_of(v);
-    if content.is_empty() && pictures.is_empty() {
-        return None;
-    }
-    let ctime = v.get("ctime").and_then(|x| x.as_i64()).unwrap_or(0);
-    let mid = member
-        .get("mid")
-        .map(|m| match m {
-            Value::String(s) => s.parse::<u64>().unwrap_or(0),
-            Value::Number(n) => n.as_u64().unwrap_or(0),
-            _ => 0,
-        })
-        .unwrap_or(0);
-    Some(Comment {
-        rpid,
-        mid,
-        uname: member
-            .get("uname")
-            .and_then(|x| x.as_str())
-            .unwrap_or("")
-            .to_string(),
-        avatar: avatar_of(member),
-        level: member
-            .get("level_info")
-            .and_then(|l| l.get("current_level"))
-            .and_then(|x| x.as_u64())
-            .unwrap_or(0) as u32,
-        is_vip: is_vip_of(member),
-        location: location_of(v),
-        pictures,
-        is_up: false,
-        is_pinned: pinned,
-        content,
-        like: v.get("like").and_then(|x| x.as_u64()).unwrap_or(0),
-        ctime,
-        ctime_text: crate::model::ts_text(ctime),
-        reply_count: v.get("rcount").and_then(|x| x.as_u64()).unwrap_or_else(|| {
-            v.get("replies")
-                .and_then(|r| r.as_array())
-                .map(|a| a.len() as u64)
-                .unwrap_or(0)
-        }),
-        replies: v
-            .get("replies")
-            .and_then(|r| r.as_array())
-            .map(|list| {
-                list.iter()
-                    .filter_map(|item| {
-                        let rpid = item.get("rpid").and_then(|x| x.as_u64())?;
-                        let content = item
-                            .get("content")
-                            .and_then(|c| c.get("message"))
-                            .and_then(|m| m.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let pictures = pictures_of(item);
-                        if content.is_empty() && pictures.is_empty() {
-                            return None;
-                        }
-                        let member = item.get("member");
-                        let mid = member
-                            .and_then(|m| m.get("mid"))
-                            .map(|m| match m {
-                                Value::String(s) => s.parse::<u64>().unwrap_or(0),
-                                Value::Number(n) => n.as_u64().unwrap_or(0),
-                                _ => 0,
-                            })
-                            .unwrap_or(0);
-                        let ctime = item.get("ctime").and_then(|x| x.as_i64()).unwrap_or(0);
-                        Some(Reply {
-                            rpid,
-                            mid,
-                            uname: member
-                                .and_then(|m| m.get("uname"))
-                                .and_then(|x| x.as_str())
-                                .unwrap_or("")
-                                .to_string(),
-                            avatar: member.map(avatar_of).unwrap_or_default(),
-                            level: member
-                                .and_then(|m| m.get("level_info"))
-                                .and_then(|l| l.get("current_level"))
-                                .and_then(|x| x.as_u64())
-                                .unwrap_or(0) as u32,
-                            is_vip: member.map(is_vip_of).unwrap_or(false),
-                            location: location_of(item),
-                            pictures,
-                            is_up: false,
-                            content,
-                            like: item.get("like").and_then(|x| x.as_u64()).unwrap_or(0),
-                            ctime,
-                            ctime_text: crate::model::ts_text(ctime),
-                            parent: item.get("parent").and_then(|x| x.as_u64()).unwrap_or(0),
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default(),
-    })
+    Ok(serde_json::to_string_pretty(
+        &crate::archive::from_comments(
+            doc,
+            crate::archive::comment_account(doc),
+            &crate::archive::comment_root(doc),
+            crate::archive::ResourcePolicy::load(),
+        ),
+    )?)
 }
 
 pub fn write_file(path: &Path, content: &str) -> Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).ok();
     }
-    std::fs::write(path, content)?;
-    Ok(())
+    let mut archive = crate::archive::Envelope::parse(content.as_bytes())?;
+    crate::archive::copy_resources(
+        &mut archive,
+        &crate::archive::configured_root(),
+        path.parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new(".")),
+    )?;
+    crate::archive::write(path, &archive)
 }
 
 /// 读取导出的 JSON 文件
@@ -295,9 +39,15 @@ pub fn load_doc(path: &Path) -> Result<ArchiveDoc> {
             "这个文件不是 JSON（本工具只导出 JSON，扩展名 .json）"
         ));
     }
-    let mut doc: ArchiveDoc =
-        serde_json::from_str(&text).map_err(|e| anyhow!("JSON 解析失败：{}", e))?;
-    doc.recount();
+    let archive = crate::archive::Envelope::parse(text.as_bytes())?;
+    let mut doc = crate::archive::comments(&archive)?;
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    doc.archive["resource_root"] = serde_json::json!(crate::archive::storage_root(parent)
+        .canonicalize()
+        .unwrap_or_else(|_| parent.to_path_buf()));
     Ok(doc)
 }
 
@@ -312,20 +62,54 @@ pub fn category(video: &Video) -> &'static str {
 }
 
 pub fn item_path(root: &Path, video: &Video) -> Result<std::path::PathBuf> {
+    item_path_for(root, video, crate::archive::account())
+}
+pub fn item_path_for(root: &Path, video: &Video, account: u64) -> Result<std::path::PathBuf> {
     if video.owner_mid == 0 || video.aid == 0 {
-        return Err(anyhow!("缺少作者 UID 或稿件 ID，跳过自动导出"));
+        return Err(anyhow!("缺少作者 UID 或稿件 ID，无法确定归档路径"));
     }
-    Ok(root
+    Ok(crate::archive::root(root)
+        .join(if account == 0 {
+            "public".into()
+        } else {
+            account.to_string()
+        })
+        .join("comments")
         .join(video.owner_mid.to_string())
         .join(category(video))
         .join(format!("{}.json", video.aid)))
 }
 
+/// Persist content before advancing its checkpoint. Replaying a partially written batch is safe.
+pub fn persist_comments(
+    root: &Path,
+    account: u64,
+    videos: &[Video],
+    checkpoint: impl FnOnce() -> Result<()>,
+) -> Result<usize> {
+    for video in videos {
+        export_item_for(root, video, account)?;
+    }
+    checkpoint()?;
+    Ok(videos.len())
+}
+
 /// One stable file per author/type/object. Never overwrite an unreadable archive.
 pub fn export_item(root: &Path, video: &Video) -> Result<std::path::PathBuf> {
-    let path = item_path(root, video)?;
+    export_item_for(root, video, crate::archive::account())
+}
+pub fn export_item_for(root: &Path, video: &Video, account: u64) -> Result<std::path::PathBuf> {
+    let path = item_path_for(root, video, account)?;
     let mut doc = if path.exists() {
         let old = load_doc(&path)?;
+        let expected = if account == 0 {
+            serde_json::Value::Null
+        } else {
+            serde_json::json!(account.to_string())
+        };
+        if old.archive["meta"]["account_uid"] != expected {
+            return Err(anyhow!("原归档账号不匹配，未覆盖"));
+        }
         if old.videos.len() != 1
             || old.videos[0].aid != video.aid
             || old.videos[0].reply_type() != video.reply_type()
@@ -339,13 +123,22 @@ pub fn export_item(root: &Path, video: &Video) -> Result<std::path::PathBuf> {
     };
     doc.merge_video(video.clone());
     doc.meta.exported_at = crate::model::now_text();
-    crate::secure::write_config(&path, &serde_json::to_value(&doc)?)?;
+    crate::archive::write(
+        &path,
+        &crate::archive::from_comments(
+            &doc,
+            account,
+            &crate::archive::root(root),
+            crate::archive::ResourcePolicy::load(),
+        ),
+    )?;
     Ok(path)
 }
 
 #[cfg(test)]
 mod item_export_tests {
     use super::*;
+    use crate::model::Comment;
     #[test]
     fn stable_paths_and_incremental_single_item() {
         let root = tempfile::tempdir().unwrap();
@@ -360,14 +153,18 @@ mod item_export_tests {
             rpid: 1,
             ..Default::default()
         });
-        let path = export_item(root.path(), &video).unwrap();
-        assert_eq!(path, root.path().join("123/videos/42.json"));
+        let path = export_item_for(root.path(), &video, 123).unwrap();
+        assert_eq!(
+            path,
+            root.path()
+                .join("archive-v1/123/comments/123/videos/42.json")
+        );
         video.title = "after".into();
         video.comments.push(Comment {
             rpid: 2,
             ..Default::default()
         });
-        assert_eq!(export_item(root.path(), &video).unwrap(), path);
+        assert_eq!(export_item_for(root.path(), &video, 123).unwrap(), path);
         let saved = load_doc(&path).unwrap();
         assert_eq!(saved.videos.len(), 1);
         assert_eq!(saved.videos[0].comments.len(), 2);
@@ -379,12 +176,13 @@ mod item_export_tests {
         ] {
             video.comment_type = ty;
             assert_eq!(
-                item_path(root.path(), &video).unwrap(),
-                root.path().join(format!("123/{name}/42.json"))
+                item_path_for(root.path(), &video, 123).unwrap(),
+                root.path()
+                    .join(format!("archive-v1/123/comments/123/{name}/42.json"))
             );
         }
         video.owner_mid = 0;
-        assert!(item_path(root.path(), &video).is_err());
+        assert!(item_path_for(root.path(), &video, 123).is_err());
     }
     #[test]
     fn corrupt_archive_is_never_overwritten() {
@@ -394,10 +192,10 @@ mod item_export_tests {
             owner_mid: 123,
             ..Default::default()
         };
-        let path = item_path(root.path(), &video).unwrap();
+        let path = item_path_for(root.path(), &video, 123).unwrap();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, b"broken").unwrap();
-        assert!(export_item(root.path(), &video).is_err());
+        assert!(export_item_for(root.path(), &video, 123).is_err());
         assert_eq!(std::fs::read(path).unwrap(), b"broken");
     }
 }
@@ -410,7 +208,12 @@ pub struct UserImport {
 }
 
 /// Only inspect this author's five export categories. Never modify source archives.
+#[cfg(test)]
 pub fn load_user_exports(root: &Path, uid: u64) -> UserImport {
+    load_user_exports_with_workers(root, uid, crate::local_read::workers())
+}
+
+pub fn load_user_exports_with_workers(root: &Path, uid: u64, workers: usize) -> UserImport {
     let mut result = UserImport {
         doc: ArchiveDoc::default(),
         loaded: 0,
@@ -421,70 +224,122 @@ pub fn load_user_exports(root: &Path, uid: u64) -> UserImport {
         result.errors.push("尚未验证账号，未读取历史导出".into());
         return result;
     }
-    for category_name in ["videos", "dynamics", "reposts", "articles", "audio"] {
-        let dir = root.join(uid.to_string()).join(category_name);
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(_) => {
-                result
-                    .errors
-                    .push(format!("无法读取历史导出目录 {}", dir.display()));
-                continue;
-            }
-        };
-        let mut paths = vec![];
-        for entry in entries {
-            match entry {
-                Ok(e)
-                    if e.path().extension().is_some_and(|x| {
-                        x.to_str().is_some_and(|s| s.eq_ignore_ascii_case("json"))
-                    }) =>
-                {
-                    paths.push(e.path())
-                }
-                Ok(_) => (),
-                Err(_) => result
-                    .errors
-                    .push(format!("无法枚举历史导出目录 {}", dir.display())),
-            }
+    let base = crate::archive::root(root)
+        .join(uid.to_string())
+        .join("comments");
+    let authors = match std::fs::read_dir(&base) {
+        Ok(v) => v,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return result,
+        Err(e) => {
+            result.errors.push(e.to_string());
+            return result;
         }
-        paths.sort();
-        for path in paths {
-            match load_doc(&path) {
-                Ok(doc)
-                    if !doc.videos.is_empty()
-                        && doc.videos.iter().all(|v| {
-                            v.owner_mid == uid && category(v) == category_name && v.aid > 0
-                        }) =>
-                {
-                    for video in doc.videos {
-                        result.doc.merge_video(video);
+    };
+    let mut videos = Vec::new();
+    let mut authors: Vec<_> = authors
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            entry
+                .file_type()
+                .is_ok_and(|kind| kind.is_dir() && !kind.is_symlink())
+        })
+        .collect();
+    authors.sort_by_key(|author| author.file_name());
+    for author in authors {
+        let author_uid = author
+            .file_name()
+            .to_string_lossy()
+            .parse::<u64>()
+            .unwrap_or(0);
+        if author_uid == 0 {
+            continue;
+        }
+        for category_name in ["videos", "dynamics", "reposts", "articles", "audio"] {
+            let Ok(entries) = std::fs::read_dir(author.path().join(category_name)) else {
+                continue;
+            };
+            let mut paths: Vec<_> = entries
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_type().is_ok_and(|t| t.is_file() && !t.is_symlink()))
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|s| s == "json"))
+                .collect();
+            paths.sort();
+            for batch in paths.chunks(32) {
+                let parsed =
+                    crate::local_read::map_ordered(batch, workers, |path| -> Result<ArchiveDoc> {
+                        let archive = crate::archive::Envelope::parse(&std::fs::read(&path)?)?;
+                        if archive.meta["account_uid"].as_str() != Some(uid.to_string().as_str()) {
+                            return Err(anyhow!("归档账号不匹配"));
+                        }
+                        crate::archive::comments(&archive)
+                    });
+                for (path, parsed) in batch.iter().zip(parsed) {
+                    match parsed {
+                        Ok(doc)
+                            if !doc.videos.is_empty()
+                                && doc.videos.iter().all(|v| {
+                                    v.owner_mid == author_uid
+                                        && category(v) == category_name
+                                        && v.aid > 0
+                                }) =>
+                        {
+                            videos.extend(doc.videos);
+                            result.loaded += 1;
+                        }
+                        _ => {
+                            result.skipped += 1;
+                            result.errors.push(format!(
+                                "跳过无效或账号/作者/分类不匹配的历史文件 {}",
+                                path.display()
+                            ));
+                        }
                     }
-                    result.loaded += 1;
-                }
-                _ => {
-                    result.skipped += 1;
-                    result.errors.push(format!(
-                        "跳过无效或作者/分类不匹配的历史文件 {}",
-                        path.display()
-                    ));
                 }
             }
         }
     }
+    result.doc.merge_videos(videos);
     result
 }
 
 #[cfg(test)]
 mod user_import_tests {
     use super::*;
+    use crate::model::Comment;
+    #[test]
+    fn parallel_comment_load_matches_serial_results() {
+        let root = tempfile::tempdir().unwrap();
+        for aid in 1..=8 {
+            let video = Video {
+                aid,
+                owner_mid: 12,
+                r#type: "video".into(),
+                comments: vec![Comment {
+                    rpid: aid * 10,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            export_item_for(root.path(), &video, 12).unwrap();
+        }
+        let serial = load_user_exports_with_workers(root.path(), 12, 1);
+        let parallel = load_user_exports_with_workers(root.path(), 12, 4);
+        assert_eq!(serial.loaded, 8);
+        assert_eq!(serial.loaded, parallel.loaded);
+        assert_eq!(serial.errors, parallel.errors);
+        assert_eq!(
+            serde_json::to_value(serial.doc.videos).unwrap(),
+            serde_json::to_value(parallel.doc.videos).unwrap()
+        );
+    }
+
     #[test]
     fn imports_only_verified_author_and_all_categories_idempotently() {
         let root = tempfile::tempdir().unwrap();
         assert_eq!(load_user_exports(root.path(), 123).loaded, 0);
         for (ty, id) in [(1, 1), (11, 2), (17, 3), (12, 4), (14, 5)] {
-            export_item(
+            export_item_for(
                 root.path(),
                 &Video {
                     aid: id,
@@ -496,16 +351,18 @@ mod user_import_tests {
                     }],
                     ..Default::default()
                 },
+                123,
             )
             .unwrap();
         }
-        export_item(
+        export_item_for(
             root.path(),
             &Video {
                 aid: 99,
                 owner_mid: 456,
                 ..Default::default()
             },
+            456,
         )
         .unwrap();
         let a = load_user_exports(root.path(), 123);
@@ -517,9 +374,13 @@ mod user_import_tests {
         }
         assert_eq!(merged.stats.comments, 5);
         assert_eq!(merged.videos.len(), 5);
-        let bad = root.path().join("123/videos/bad.json");
+        let bad = root
+            .path()
+            .join("archive-v1/123/comments/123/videos/bad.json");
         std::fs::write(&bad, b"broken").unwrap();
-        let mismatch = root.path().join("123/videos/other.json");
+        let mismatch = root
+            .path()
+            .join("archive-v1/123/comments/123/videos/other.json");
         let mut doc = ArchiveDoc::default();
         doc.merge_video(Video {
             aid: 100,
@@ -534,95 +395,114 @@ mod user_import_tests {
     }
 }
 
-pub struct SplitReport {
-    pub saved: usize,
-    pub failed: usize,
-    pub errors: Vec<String>,
-}
-pub fn split_import(files: &[std::path::PathBuf], root: &Path) -> SplitReport {
-    let mut report = SplitReport {
-        saved: 0,
-        failed: 0,
-        errors: vec![],
-    };
-    let mut merged = ArchiveDoc::default();
-    for path in files {
-        let parsed = std::fs::read_to_string(path)
-            .map_err(anyhow::Error::from)
-            .and_then(|text| import_json(&text, "imported"));
-        match parsed {
-            Ok(videos) => {
-                for video in videos {
-                    merged.merge_video(video);
-                }
-            }
-            Err(_) => {
-                report.failed += 1;
-                report
-                    .errors
-                    .push(format!("无法拆解源文件 {}，原文件已保留", path.display()));
-            }
-        }
-    }
-    let sources = files
-        .iter()
-        .filter_map(|p| p.canonicalize().ok())
-        .collect::<Vec<_>>();
-    for video in &merged.videos {
-        let result = item_path(root, video).and_then(|target| {
-            if target
-                .canonicalize()
-                .ok()
-                .is_some_and(|p| sources.contains(&p))
-            {
-                return Err(anyhow!("目标与源文件相同，未改写源文件"));
-            }
-            export_item(root, video)
-        });
-        match result {
-            Ok(_) => report.saved += 1,
-            Err(e) => {
-                report.failed += 1;
-                report
-                    .errors
-                    .push(format!("稿件 {} 拆解导出失败：{}", video.aid, e));
-            }
-        }
-    }
-    report
-}
-
 #[cfg(test)]
-mod split_tests {
+mod continuous_archive_tests {
     use super::*;
-    #[test]
-    fn splits_by_existing_export_layout_and_preserves_source() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("exports");
-        let source = dir.path().join("all.json");
-        let mut doc = ArchiveDoc::default();
-        for (ty, id) in [(1, 42), (11, 43), (17, 44), (12, 45), (14, 46)] {
-            doc.merge_video(Video {
-                owner_mid: 123,
-                aid: id,
-                comment_type: ty,
-                comments: vec![Comment {
-                    rpid: id,
-                    ..Default::default()
-                }],
+    use crate::model::Comment;
+    fn video(ty: u32) -> Video {
+        Video {
+            aid: 42,
+            owner_mid: 123,
+            r#type: match ty {
+                11 | 17 => "dynamic",
+                12 => "article",
+                14 => "audio",
+                _ => "video",
+            }
+            .into(),
+            comment_type: ty,
+            comments: vec![Comment {
+                rpid: 7,
                 ..Default::default()
-            });
+            }],
+            ..Default::default()
         }
-        let text = to_json(&doc).unwrap();
-        std::fs::write(&source, &text).unwrap();
-        let first = split_import(&[source.clone()], &root);
-        assert_eq!((first.saved, first.failed), (5, 0));
-        let again = split_import(&[source.clone()], &root);
-        assert_eq!(again.saved, 5);
-        let imported = load_user_exports(&root, 123);
-        assert_eq!(imported.doc.stats.comments, 5);
-        assert_eq!(std::fs::read_to_string(&source).unwrap(), text);
-        let same = split_import(&[root.join("123/videos/42.json")], &root);
-        assert_eq!(same.failed, 1);
+    }
+    #[test]
+    fn all_five_types_save_separate_objects_before_advancing_the_checkpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        let videos: Vec<_> = [1, 11, 17, 12, 14].into_iter().map(video).collect();
+        let checkpoint = dir.path().join("checkpoint.json");
+        let count = persist_comments(dir.path(), 12, &videos, || {
+            for v in &videos {
+                let path = item_path_for(dir.path(), v, 12)?;
+                let saved = load_doc(&path)?;
+                assert_eq!(saved.videos[0].reply_type(), v.reply_type());
+                assert_eq!(saved.stats.comments, 1);
+            }
+            std::fs::write(&checkpoint, b"advanced")?;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(count, 5);
+        assert_eq!(std::fs::read(checkpoint).unwrap(), b"advanced");
+        let paths: std::collections::HashSet<_> = videos
+            .iter()
+            .map(|v| item_path_for(dir.path(), v, 12).unwrap())
+            .collect();
+        assert_eq!(paths.len(), 5);
+        assert_ne!(
+            item_path_for(dir.path(), &videos[0], 12).unwrap(),
+            item_path_for(dir.path(), &videos[0], 13).unwrap()
+        );
+    }
+    #[test]
+    fn unreadable_existing_archive_does_not_advance_or_overwrite_any_checkpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        let v = video(1);
+        let target = item_path_for(dir.path(), &v, 12).unwrap();
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, b"broken").unwrap();
+        let mut advanced = false;
+        assert!(persist_comments(dir.path(), 12, &[v], || {
+            advanced = true;
+            Ok(())
+        })
+        .is_err());
+        assert!(!advanced);
+        assert_eq!(std::fs::read(target).unwrap(), b"broken");
+    }
+    #[test]
+    fn checkpoint_failure_can_replay_saved_content_without_duplicate_comments() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut v = video(1);
+        let checkpoint = dir.path().join("checkpoint.json");
+        std::fs::write(&checkpoint, b"previous").unwrap();
+        assert!(
+            persist_comments(dir.path(), 12, std::slice::from_ref(&v), || Err(anyhow!(
+                "checkpoint unavailable"
+            )))
+            .is_err()
+        );
+        assert_eq!(std::fs::read(&checkpoint).unwrap(), b"previous");
+        v.comments.push(Comment {
+            rpid: 8,
+            ..Default::default()
+        });
+        persist_comments(dir.path(), 12, std::slice::from_ref(&v), || {
+            std::fs::write(&checkpoint, b"next")?;
+            Ok(())
+        })
+        .unwrap();
+        persist_comments(dir.path(), 12, std::slice::from_ref(&v), || Ok(())).unwrap();
+        assert_eq!(
+            load_doc(&item_path_for(dir.path(), &v, 12).unwrap())
+                .unwrap()
+                .stats
+                .comments,
+            2
+        );
+    }
+    #[test]
+    fn a_foreign_account_file_in_the_target_directory_is_not_merged() {
+        let dir = tempfile::tempdir().unwrap();
+        let v = video(1);
+        let source = export_item_for(dir.path(), &v, 13).unwrap();
+        let target = item_path_for(dir.path(), &v, 12).unwrap();
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::copy(source, &target).unwrap();
+        let original = std::fs::read(&target).unwrap();
+        assert!(persist_comments(dir.path(), 12, &[v], || panic!("must not advance")).is_err());
+        assert_eq!(std::fs::read(target).unwrap(), original);
     }
 }

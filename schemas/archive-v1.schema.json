@@ -1,0 +1,554 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bili-comment-hub.local/schemas/archive-v1.schema.json",
+  "title": "Bili Archive v1",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "meta",
+    "source",
+    "users",
+    "subjects",
+    "sessions",
+    "items",
+    "resources",
+    "collection"
+  ],
+  "properties": {
+    "format": {
+      "const": "bili-archive"
+    },
+    "version": {
+      "const": 1
+    },
+    "meta": {
+      "type": "object",
+      "required": [
+        "account_uid",
+        "app_version",
+        "exported_at"
+      ],
+      "properties": {
+        "account_uid": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9]+$"
+        },
+        "app_version": {
+          "type": "string"
+        },
+        "exported_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "source": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "comments",
+            "messages"
+          ]
+        },
+        "owner_uid": {
+          "type": "string",
+          "pattern": "^[0-9]+$"
+        },
+        "category": {
+          "type": "string"
+        },
+        "categories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "session_key": {
+          "type": "string"
+        },
+        "subject_keys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "users": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "uid",
+          "name",
+          "avatar_resource_id"
+        ],
+        "properties": {
+          "uid": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "avatar_resource_id": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "subjects": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "key",
+          "type",
+          "id"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "video",
+              "dynamic",
+              "article",
+              "audio"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9]+$"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "sessions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "key",
+          "talker_id",
+          "session_type",
+          "name",
+          "timestamp",
+          "raw"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^(user|group)_[0-9]+$"
+          },
+          "talker_id": {
+            "type": "string",
+            "pattern": "^[0-9]+$"
+          },
+          "session_type": {
+            "enum": [
+              1,
+              2
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "raw": {}
+        },
+        "additionalProperties": false
+      }
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "text",
+          "timestamp",
+          "resource_ids",
+          "raw"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "type": {
+            "enum": [
+              "comment",
+              "comment_reply",
+              "private",
+              "replies",
+              "mentions",
+              "likes"
+            ]
+          },
+          "text": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "subject_key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "session_key": {
+            "type": "string"
+          },
+          "user_uid": {
+            "type": "string",
+            "pattern": "^[0-9]+$"
+          },
+          "sender_uid": {
+            "type": "string"
+          },
+          "actor_name": {
+            "type": "string"
+          },
+          "root_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "type": "string"
+          },
+          "native_uri": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "integer"
+          },
+          "like_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "like_users": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "key",
+                "user_key",
+                "user_uid",
+                "like_time",
+                "raw"
+              ],
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "user_key": {
+                  "type": "string"
+                },
+                "user_uid": {
+                  "type": "string"
+                },
+                "like_time": {
+                  "type": "integer"
+                },
+                "raw": {}
+              },
+              "additionalProperties": false
+            }
+          },
+          "like_detail": {
+            "type": "object",
+            "required": [
+              "status",
+              "error"
+            ],
+            "properties": {
+              "status": {
+                "enum": [
+                  "pending",
+                  "partial",
+                  "finished"
+                ]
+              },
+              "error": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "resource_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "fields": {
+            "type": "object"
+          },
+          "raw": {}
+        },
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "enum": [
+                    "comment",
+                    "comment_reply"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "subject_key",
+                "user_uid",
+                "root_id",
+                "parent_id",
+                "fields"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "enum": [
+                    "private",
+                    "replies",
+                    "mentions",
+                    "likes"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "session_key",
+                "sender_uid",
+                "status",
+                "like_count",
+                "like_users",
+                "like_detail"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "resources": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-f0-9]{32}$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "url",
+          "path",
+          "status",
+          "required",
+          "mime",
+          "size",
+          "checksum",
+          "error"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{32}$"
+          },
+          "type": {
+            "enum": [
+              "private_image",
+              "avatar",
+              "cover",
+              "content_image",
+              "message_attachment"
+            ]
+          },
+          "url": {
+            "type": "string",
+            "pattern": "^https?://"
+          },
+          "path": {
+            "type": "string",
+            "pattern": "^(|resources/(?:[0-9]+|public)/[a-f0-9]{32}\\.[a-z0-9]+)$"
+          },
+          "status": {
+            "enum": [
+              "not_requested",
+              "pending",
+              "saved",
+              "failed"
+            ]
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "mime": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "checksum": {
+            "type": "string",
+            "pattern": "^([a-f0-9]{32})?$"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "private_image"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "required": {
+                  "const": true
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "saved"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "path": {
+                  "minLength": 1
+                },
+                "size": {
+                  "minimum": 1
+                },
+                "checksum": {
+                  "pattern": "^[a-f0-9]{32}$"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "collection": {
+      "type": "object",
+      "required": [
+        "status",
+        "archived_total",
+        "reported_total",
+        "exhausted"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "partial",
+            "exhausted",
+            "cancelled",
+            "failed"
+          ]
+        },
+        "archived_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reported_total": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "exhausted": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "source": {
+            "properties": {
+              "type": {
+                "const": "messages"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "meta": {
+            "properties": {
+              "account_uid": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]*$"
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

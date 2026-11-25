@@ -1,0 +1,387 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Bili collection report v1",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "run_id",
+    "account_uid",
+    "started_at",
+    "ended_at",
+    "scope",
+    "status",
+    "archived_total",
+    "counts",
+    "issues"
+  ],
+  "properties": {
+    "format": {
+      "const": "bili-collection-report"
+    },
+    "version": {
+      "const": 1
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "account_uid": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]*$"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "ended_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "scope": {
+      "type": "object"
+    },
+    "status": {
+      "enum": [
+        "running",
+        "waiting",
+        "retrying",
+        "paused",
+        "stopped",
+        "completed",
+        "partial",
+        "failed"
+      ]
+    },
+    "archived_total": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "stage",
+          "target_id",
+          "time",
+          "type",
+          "reason",
+          "retries",
+          "resolved"
+        ],
+        "properties": {
+          "stage": {
+            "type": "string"
+          },
+          "target_id": {
+            "type": "string"
+          },
+          "time": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "retries": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "resolved": {
+            "type": "boolean"
+          },
+          "resolved_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "disposition": {
+            "enum": [
+              "deferred",
+              "recovered",
+              "ng"
+            ]
+          },
+          "pagination": {
+            "anyOf": [
+              {
+                "type": "object",
+                "required": [
+                  "page",
+                  "returned_users",
+                  "new_users",
+                  "unseen_page_users",
+                  "archived_users",
+                  "reported_likes",
+                  "last_mid",
+                  "is_end",
+                  "reason"
+                ],
+                "properties": {
+                  "page": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "returned_users": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "new_users": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "unseen_page_users": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "archived_users": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "reported_likes": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "last_mid": {
+                    "type": "string"
+                  },
+                  "is_end": {
+                    "type": "boolean"
+                  },
+                  "reason": {
+                    "enum": [
+                      "empty_page",
+                      "missing_cursor",
+                      "no_new_users",
+                      "invalid_paging"
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "required": [
+                  "reason"
+                ],
+                "properties": {
+                  "reason": {
+                    "enum": [
+                      "invalid_paging",
+                      "non_advancing_cursor"
+                    ]
+                  },
+                  "cursor_id": {
+                    "type": "string"
+                  },
+                  "cursor_time": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "sequence": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "additionalProperties": false
+              }
+            ]
+          },
+          "type": {
+            "enum": [
+              "risk",
+              "network",
+              "paging",
+              "fatal",
+              "resource"
+            ]
+          },
+          "paging_key": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{32}$"
+          }
+        },
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "disposition"
+              ],
+              "properties": {
+                "disposition": {
+                  "const": "deferred"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resolved": {
+                  "const": false
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "disposition"
+              ],
+              "properties": {
+                "disposition": {
+                  "enum": [
+                    "deferred",
+                    "ng"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resolved": {
+                  "const": false
+                },
+                "retries": {
+                  "maximum": 1
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "disposition"
+              ],
+              "properties": {
+                "disposition": {
+                  "const": "ng"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "retries": {
+                  "const": 1
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "disposition"
+              ],
+              "properties": {
+                "disposition": {
+                  "const": "recovered"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resolved": {
+                  "const": true
+                },
+                "retries": {
+                  "const": 1
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "deferred_likes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "paging_deferred": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "paging_recovered": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "paging_ng": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "paging_skipped_ng": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "paging_unresolved": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "deferred_likes"
+        ],
+        "properties": {
+          "deferred_likes": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "status": {
+            "enum": [
+              "running",
+              "waiting",
+              "retrying",
+              "paused",
+              "stopped",
+              "partial",
+              "failed"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "paging_unresolved"
+        ],
+        "properties": {
+          "paging_unresolved": {
+            "minimum": 1
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "status": {
+            "enum": [
+              "running",
+              "waiting",
+              "retrying",
+              "paused",
+              "stopped",
+              "partial",
+              "failed"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

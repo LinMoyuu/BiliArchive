@@ -1,0 +1,12 @@
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+const root=path.join(__dirname,'..'),css=fs.readFileSync(path.join(root,'web/workspaces.css'),'utf8'),source=fs.readFileSync(path.join(root,'web/comments.js'),'utf8');
+const meta=css.match(/:is\(#comment-workspace,#comment-header\) \.vmeta\{([^}]+)\}/)[1];
+for(const rule of ['--meta-item-height:17px','line-height:15px','align-items:center','flex-wrap:wrap','gap:6px'])assert(meta.includes(rule));
+const items=css.match(/:is\(#comment-workspace,#comment-header\) \.vmeta > span:not\(\.dot\)\{([^}]+)\}/)[1];
+for(const rule of ['display:inline-flex','align-items:center','height:var(--meta-item-height)','box-sizing:border-box','line-height:15px','white-space:nowrap','flex:none'])assert(items.includes(rule));
+const badge=css.match(/:is\(#comment-workspace,#comment-header\) \.badge\{([^}]+)\}/)[1];
+for(const rule of ['font-size:10px','padding:1px 6px','line-height:15px','border-radius:5px'])assert(badge.includes(rule));
+assert(css.includes('.vmeta .dot{width:3px; height:3px;'));
+for(const status of ['deleted','private','rejected'])assert(css.includes('.badge.'+status+'{'));
+assert(source.includes('<div class="vmeta">'));assert(source.includes('<span title="发布 '));assert(source.includes('首评 ${ymd(f)}</span>'));assert(source.includes('<span>抓取 ${num(cnt)}</span>'));
+console.log('PASS: comment-list metadata matches existing 17px tags, centered date/count line boxes, whole-item wrapping and unchanged detail badges/status styles');

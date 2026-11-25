@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 /// 一次导出所对应的完整文档：元信息 + 统计 + 视频列表
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArchiveDoc {
+    #[serde(skip)]
+    pub archive: serde_json::Value,
     pub meta: Meta,
     pub stats: Stats,
     pub videos: Vec<Video>,
@@ -11,6 +13,7 @@ pub struct ArchiveDoc {
 impl Default for ArchiveDoc {
     fn default() -> Self {
         Self {
+            archive: serde_json::Value::Null,
             meta: Meta::new(),
             stats: Stats::default(),
             videos: Vec::new(),
@@ -30,7 +33,7 @@ pub struct Meta {
 impl Meta {
     pub fn new() -> Self {
         Self {
-            app: "BiliCommentHub".into(),
+            app: "BiliArchive".into(),
             version: env!("CARGO_PKG_VERSION").into(),
             format_version: 2,
             source: "https://member.bilibili.com/platform/inter-active/comment".into(),
@@ -66,9 +69,9 @@ pub struct Video {
     pub url: String,
     pub cover: String,
     /// 内容类型：video 视频 / dynamic 动态 / article 专栏。
-    /// JSON 字段为 type，必须提供；不兼容旧 kind 字段。
+    /// JSON 字段为 type，必须提供；不提供旧字段别名。
     #[serde(rename = "type")]
-    pub kind: String,
+    pub r#type: String,
     /// B 站评论接口里的 type：1 视频 / 11 图文动态 / 17 转发动态 / 12 专栏
     #[serde(default)]
     pub comment_type: u32,
@@ -113,9 +116,43 @@ pub struct Video {
 }
 
 impl Video {
+    pub fn without_comments(&self) -> Self {
+        Self {
+            bvid: self.bvid.clone(),
+            aid: self.aid,
+            title: self.title.clone(),
+            owner_mid: self.owner_mid,
+            owner_name: self.owner_name.clone(),
+            url: self.url.clone(),
+            cover: self.cover.clone(),
+            r#type: self.r#type.clone(),
+            comment_type: self.comment_type,
+            text: self.text.clone(),
+            text_pics: self.text_pics.clone(),
+            ip_location: self.ip_location.clone(),
+            like_count: self.like_count,
+            forward_count: self.forward_count,
+            dynamic_id: self.dynamic_id,
+            orig_text: self.orig_text.clone(),
+            orig_author: self.orig_author.clone(),
+            publish_time: self.publish_time,
+            publish_time_text: self.publish_time_text.clone(),
+            comment_total: self.comment_total,
+            status: self.status.clone(),
+            status_text: self.status_text.clone(),
+            comments: Vec::new(),
+        }
+    }
     pub fn reply_type(&self) -> u32 {
-        if self.comment_type > 0 { return self.comment_type; }
-        match self.kind.as_str() { "dynamic" => 11, "article" => 12, "audio" => 14, _ => 1 }
+        if self.comment_type > 0 {
+            return self.comment_type;
+        }
+        match self.r#type.as_str() {
+            "dynamic" => 11,
+            "article" => 12,
+            "audio" => 14,
+            _ => 1,
+        }
     }
 
     pub fn url_for(bvid: &str, aid: u64) -> String {
@@ -132,11 +169,11 @@ impl Video {
     }
 
     pub fn is_dynamic(&self) -> bool {
-        self.kind == "dynamic"
+        self.r#type == "dynamic"
     }
 
     pub fn is_article(&self) -> bool {
-        self.kind == "article"
+        self.r#type == "article"
     }
 
     /// 动态没有标题，取正文首行当标题；视频照旧
@@ -144,7 +181,7 @@ impl Video {
         if !self.title.is_empty() {
             return self.title.clone();
         }
-        if self.is_dynamic() || self.is_article() || self.kind == "audio" {
+        if self.is_dynamic() || self.is_article() || self.r#type == "audio" {
             let line = self
                 .text
                 .lines()
@@ -159,17 +196,17 @@ impl Video {
                     line.to_string()
                 };
             }
-            let kind_name = if self.is_article() {
+            let type_name = if self.is_article() {
                 "专栏"
-            } else if self.kind == "audio" {
+            } else if self.r#type == "audio" {
                 "音频"
             } else {
                 "动态"
             };
             return if self.dynamic_id > 0 {
-                format!("{} {}", kind_name, self.dynamic_id)
+                format!("{} {}", type_name, self.dynamic_id)
             } else {
-                format!("{} {}", kind_name, self.aid)
+                format!("{} {}", type_name, self.aid)
             };
         }
         if !self.bvid.is_empty() {
@@ -182,6 +219,8 @@ impl Video {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Comment {
+    #[serde(default)]
+    pub raw: serde_json::Value,
     pub rpid: u64,
     pub mid: u64,
     pub uname: String,
@@ -218,6 +257,8 @@ pub struct Comment {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Reply {
+    #[serde(default)]
+    pub raw: serde_json::Value,
     pub rpid: u64,
     pub mid: u64,
     pub uname: String,
@@ -267,19 +308,11 @@ impl ArchiveDoc {
         for v in &self.videos {
             comments += v.comments.len();
             likes += v.comments.iter().map(|c| c.like).sum::<u64>();
-            with_location += v
-                .comments
-                .iter()
-                .filter(|c| !c.location.is_empty())
-                .count();
+            with_location += v.comments.iter().filter(|c| !c.location.is_empty()).count();
             for c in &v.comments {
                 replies += c.replies.len();
                 likes += c.replies.iter().map(|r| r.like).sum::<u64>();
-                with_location += c
-                    .replies
-                    .iter()
-                    .filter(|r| !r.location.is_empty())
-                    .count();
+                with_location += c.replies.iter().filter(|r| !r.location.is_empty()).count();
             }
         }
         self.stats = Stats {
@@ -294,25 +327,48 @@ impl ArchiveDoc {
     }
 
     /// 按 (类型, id) 合并：同一内容内按 rpid 去重，回复同理
-    pub fn merge_video(&mut self, mut incoming: Video) {
+    pub fn merge_video(&mut self, incoming: Video) {
+        let position = self.videos.iter().position(|video| {
+            video.aid == incoming.aid && video.reply_type() == incoming.reply_type()
+        });
+        Self::merge_video_at(&mut self.videos, incoming, position);
+        self.finish_video_merge();
+    }
+
+    pub fn merge_videos(&mut self, incoming: impl IntoIterator<Item = Video>) {
+        let mut positions = std::collections::HashMap::new();
+        for (position, video) in self.videos.iter().enumerate() {
+            positions
+                .entry((video.reply_type(), video.aid))
+                .or_insert(position);
+        }
+        for video in incoming {
+            let key = (video.reply_type(), video.aid);
+            let position = positions.get(&key).copied();
+            if position.is_none() {
+                positions.insert(key, self.videos.len());
+            }
+            Self::merge_video_at(&mut self.videos, video, position);
+        }
+        self.finish_video_merge();
+    }
+
+    fn merge_video_at(videos: &mut Vec<Video>, mut incoming: Video, position: Option<usize>) {
         let norm = |v: &Video| {
-            if v.kind.is_empty() {
+            if v.r#type.is_empty() {
                 "video".to_string()
             } else {
-                v.kind.clone()
+                v.r#type.clone()
             }
         };
-        let incoming_kind = norm(&incoming);
-        if let Some(existing) = self
-            .videos
-            .iter_mut()
-            .find(|v| v.aid == incoming.aid && v.reply_type() == incoming.reply_type())
-        {
+        let incoming_type = norm(&incoming);
+        if let Some(position) = position {
+            let existing = &mut videos[position];
             if existing.title.is_empty() {
                 existing.title = incoming.title.clone();
             }
-            if existing.kind.is_empty() {
-                existing.kind = incoming_kind.clone();
+            if existing.r#type.is_empty() {
+                existing.r#type = incoming_type.clone();
             }
             if existing.text.is_empty() {
                 existing.text = incoming.text.clone();
@@ -344,7 +400,9 @@ impl ArchiveDoc {
             if existing.cover.is_empty() {
                 existing.cover = incoming.cover.clone();
             }
-            if existing.owner_mid == 0 { existing.owner_mid = incoming.owner_mid; }
+            if existing.owner_mid == 0 {
+                existing.owner_mid = incoming.owner_mid;
+            }
             if existing.owner_name.is_empty() {
                 existing.owner_name = incoming.owner_name.clone();
             }
@@ -359,9 +417,17 @@ impl ArchiveDoc {
             if incoming.comment_total > existing.comment_total {
                 existing.comment_total = incoming.comment_total;
             }
+            let mut comments = std::collections::HashMap::new();
+            for (index, comment) in existing.comments.iter().enumerate() {
+                comments.entry(comment.rpid).or_insert(index);
+            }
             for c in incoming.comments.drain(..) {
-                match existing.comments.iter_mut().find(|e| e.rpid == c.rpid) {
-                    Some(e) => {
+                match comments.get(&c.rpid).copied() {
+                    Some(index) => {
+                        let e = &mut existing.comments[index];
+                        if e.raw.is_null() && !c.raw.is_null() {
+                            e.raw = c.raw.clone();
+                        }
                         if e.avatar.is_empty() {
                             e.avatar = c.avatar.clone();
                         }
@@ -374,9 +440,17 @@ impl ArchiveDoc {
                         if !e.is_vip {
                             e.is_vip = c.is_vip;
                         }
+                        let mut replies = std::collections::HashMap::new();
+                        for (index, reply) in e.replies.iter().enumerate() {
+                            replies.entry(reply.rpid).or_insert(index);
+                        }
                         for r in c.replies {
-                            match e.replies.iter_mut().find(|x| x.rpid == r.rpid) {
-                                Some(x) => {
+                            match replies.get(&r.rpid).copied() {
+                                Some(index) => {
+                                    let x = &mut e.replies[index];
+                                    if x.raw.is_null() && !r.raw.is_null() {
+                                        x.raw = r.raw.clone();
+                                    }
                                     if x.location.is_empty() {
                                         x.location = r.location.clone();
                                     }
@@ -387,47 +461,56 @@ impl ArchiveDoc {
                                         x.is_vip = r.is_vip;
                                     }
                                 }
-                                None => e.replies.push(r),
+                                None => {
+                                    replies.insert(r.rpid, e.replies.len());
+                                    e.replies.push(r);
+                                }
                             }
                         }
                         if c.is_pinned {
                             e.is_pinned = true;
                         }
                     }
-                    None => existing.comments.push(c),
+                    None => {
+                        comments.insert(c.rpid, existing.comments.len());
+                        existing.comments.push(c);
+                    }
                 }
             }
         } else {
             for c in incoming.comments.iter_mut() {
-                let mut seen: Vec<u64> = Vec::new();
-                c.replies.retain(|r| {
-                    if seen.contains(&r.rpid) {
-                        false
-                    } else {
-                        seen.push(r.rpid);
-                        true
-                    }
-                });
+                let mut seen = std::collections::HashSet::new();
+                c.replies.retain(|r| seen.insert(r.rpid));
                 c.replies.sort_by_key(|r| r.ctime);
             }
             incoming.comments.sort_by(|a, b| b.ctime.cmp(&a.ctime));
-            self.videos.push(incoming);
+            videos.push(incoming);
         }
         // A reply collected before its root may temporarily have been a top-level
         // orphan. Once a later page restores its root, retain it only under that root.
-        for video in &mut self.videos {
-            let replies: std::collections::HashSet<u64> = video.comments.iter()
-                .flat_map(|c| c.replies.iter().map(|r| r.rpid)).collect();
+        let position = position.unwrap_or_else(|| videos.len() - 1);
+        let video = &mut videos[position];
+        {
+            let replies: std::collections::HashSet<u64> = video
+                .comments
+                .iter()
+                .flat_map(|c| c.replies.iter().map(|r| r.rpid))
+                .collect();
             video.comments.retain(|c| !replies.contains(&c.rpid));
         }
-        self.videos.sort_by(|a, b| a.aid.cmp(&b.aid));
+    }
+
+    fn finish_video_merge(&mut self) {
+        self.videos.sort_by_key(|video| video.aid);
         self.meta.exported_at = now_text();
         self.recount();
     }
 }
 
 pub fn now_text() -> String {
-    chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%:z").to_string()
+    chrono::Local::now()
+        .format("%Y-%m-%dT%H:%M:%S%:z")
+        .to_string()
 }
 
 pub fn ts_text(ts: i64) -> String {
@@ -456,13 +539,36 @@ mod continuation_merge_tests {
     use super::*;
     #[test]
     fn later_root_replaces_earlier_orphan_without_duplicating_reply() {
-        let mut doc=ArchiveDoc::default();
-        doc.merge_video(Video{aid:42,owner_mid:123,comments:vec![Comment{rpid:2,content:"reply".into(),..Default::default()}],..Default::default()});
-        doc.merge_video(Video{aid:42,owner_mid:123,comments:vec![Comment{rpid:1,replies:vec![Reply{rpid:2,content:"reply".into(),..Default::default()}],..Default::default()}],..Default::default()});
-        assert_eq!(doc.videos[0].comments.len(),1);
-        assert_eq!(doc.videos[0].comments[0].rpid,1);
-        assert_eq!(doc.videos[0].comments[0].replies.len(),1);
-        assert_eq!(doc.stats.comments,1);assert_eq!(doc.stats.replies,1);
+        let mut doc = ArchiveDoc::default();
+        doc.merge_video(Video {
+            aid: 42,
+            owner_mid: 123,
+            comments: vec![Comment {
+                rpid: 2,
+                content: "reply".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        doc.merge_video(Video {
+            aid: 42,
+            owner_mid: 123,
+            comments: vec![Comment {
+                rpid: 1,
+                replies: vec![Reply {
+                    rpid: 2,
+                    content: "reply".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        assert_eq!(doc.videos[0].comments.len(), 1);
+        assert_eq!(doc.videos[0].comments[0].rpid, 1);
+        assert_eq!(doc.videos[0].comments[0].replies.len(), 1);
+        assert_eq!(doc.stats.comments, 1);
+        assert_eq!(doc.stats.replies, 1);
     }
 }
 
@@ -470,13 +576,26 @@ mod continuation_merge_tests {
 mod public_type_field_tests {
     use super::*;
     #[test]
-    fn serializes_type_and_rejects_legacy_kind() {
-        let video=Video{kind:"dynamic".into(),aid:42,owner_mid:123,..Default::default()};
-        let value=serde_json::to_value(&video).unwrap();
-        assert_eq!(value["type"],"dynamic");assert!(value.get("kind").is_none());
-        assert_eq!(serde_json::from_value::<Video>(value.clone()).unwrap().kind,"dynamic");
-        let mut old=value.clone();let object=old.as_object_mut().unwrap();
-        let ty=object.remove("type").unwrap();object.insert("kind".into(),ty);
+    fn serializes_required_type_without_aliases() {
+        let video = Video {
+            r#type: "dynamic".into(),
+            aid: 42,
+            owner_mid: 123,
+            ..Default::default()
+        };
+        let value = serde_json::to_value(&video).unwrap();
+        assert_eq!(value["type"], "dynamic");
+        assert!(value.get("kind").is_none());
+        assert_eq!(
+            serde_json::from_value::<Video>(value.clone())
+                .unwrap()
+                .r#type,
+            "dynamic"
+        );
+        let mut old = value.clone();
+        let object = old.as_object_mut().unwrap();
+        let ty = object.remove("type").unwrap();
+        object.insert("kind".into(), ty);
         assert!(serde_json::from_value::<Video>(old).is_err());
     }
 }

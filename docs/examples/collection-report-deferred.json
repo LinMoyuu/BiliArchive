@@ -1,0 +1,44 @@
+{
+  "format": "bili-collection-report",
+  "version": 1,
+  "run_id": "20261125T014739000000000-1234",
+  "account_uid": "12",
+  "started_at": "2026-11-25T01:47:39+08:00",
+  "ended_at": "2026-11-25T01:47:45+08:00",
+  "scope": {
+    "types": [
+      "likes"
+    ],
+    "from": 0,
+    "to": 0
+  },
+  "status": "partial",
+  "archived_total": 1,
+  "counts": {
+    "likes": 1
+  },
+  "issues": [
+    {
+      "stage": "点赞明细 1/1 · 通知 831729275658240 · 第 1 页 · 已归档 0/3 位",
+      "target_id": "831729275658240",
+      "time": "2026-11-25T01:47:40+08:00",
+      "reason": "重试一次后仍返回空用户列表，本轮暂缓，保留当前页并继续下一条通知",
+      "retries": 1,
+      "resolved": false,
+      "disposition": "deferred",
+      "pagination": {
+        "page": 1,
+        "returned_users": 0,
+        "new_users": 0,
+        "unseen_page_users": 0,
+        "archived_users": 0,
+        "reported_likes": 3,
+        "last_mid": "",
+        "is_end": false,
+        "reason": "empty_page"
+      },
+      "type": "paging"
+    }
+  ],
+  "deferred_likes": 1
+}

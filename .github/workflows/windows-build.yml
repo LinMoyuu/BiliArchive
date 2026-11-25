@@ -52,7 +52,7 @@ jobs:
       - name: Upload Windows executable
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: bili-comment-hub-windows-x64
-          path: target/x86_64-pc-windows-msvc/release/bili-comment-hub.exe
+          name: biliarchive-windows-x64
+          path: target/x86_64-pc-windows-msvc/release/biliarchive.exe
           if-no-files-found: error
           retention-days: 14

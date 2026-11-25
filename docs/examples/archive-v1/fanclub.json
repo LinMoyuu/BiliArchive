@@ -1,0 +1,77 @@
+{
+  "format": "bili-archive",
+  "version": 1,
+  "meta": {
+    "account_uid": "12",
+    "app_version": "1.0.0",
+    "exported_at": "2026-11-24T12:00:00+08:00"
+  },
+  "source": {
+    "type": "messages"
+  },
+  "users": {
+    "2": {
+      "uid": "2",
+      "name": "示例用户",
+      "avatar_resource_id": ""
+    }
+  },
+  "subjects": {},
+  "sessions": [
+    {
+      "key": "group_4",
+      "talker_id": "4",
+      "session_type": 2,
+      "name": "示例会话",
+      "timestamp": 1700000000,
+      "raw": {}
+    }
+  ],
+  "items": [
+    {
+      "id": "18446744073709551614",
+      "type": "private",
+      "session_key": "group_4",
+      "subject_key": null,
+      "sender_uid": "2",
+      "actor_name": "示例用户",
+      "text": "示例消息",
+      "timestamp": 1700000000,
+      "url": "",
+      "native_uri": null,
+      "status": 0,
+      "like_count": 0,
+      "like_users": [],
+      "like_detail": {
+        "status": "pending",
+        "error": ""
+      },
+      "resource_ids": [
+        "4993ac47071ebe205be15cd3f5c23895"
+      ],
+      "raw": {
+        "msg_type": 2
+      }
+    }
+  ],
+  "resources": {
+    "4993ac47071ebe205be15cd3f5c23895": {
+      "id": "4993ac47071ebe205be15cd3f5c23895",
+      "type": "private_image",
+      "url": "https://example.test/private-image.png",
+      "path": "",
+      "status": "pending",
+      "required": true,
+      "mime": "",
+      "size": 0,
+      "checksum": "",
+      "error": ""
+    }
+  },
+  "collection": {
+    "status": "partial",
+    "archived_total": 1,
+    "reported_total": null,
+    "exhausted": null
+  }
+}

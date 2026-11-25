@@ -1,15 +1,29 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod account_ui;
+mod library;
+mod local_read;
+mod offline;
+mod portable_zip;
+mod archive;
 mod bili;
 mod checkpoint;
 mod collection;
+mod range_ui;
+mod content_rows;
 mod export;
 mod model;
+mod messages;
+mod message_groups;
+mod message_subjects;
+mod message_profiles;
+mod messages_ui;
+mod message_dates;
 mod qrlogin;
 mod secure;
 mod web;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use model::{human_count, ts_text, ArchiveDoc, Video};
 use slint::{ModelRc, SharedString, VecModel, Weak};
 use std::collections::{HashMap, HashSet};
@@ -22,7 +36,6 @@ use std::time::Duration;
 slint::include_modules!();
 
 const MAX_LOG_LINES: usize = 240;
-const PREVIEW_CHARS: usize = 5200;
 
 // ---------------- 配置 ----------------
 #[derive(Clone)]
@@ -35,7 +48,6 @@ struct Cfg {
     /// 设备指纹，扫码或首次请求时拿到，之后一直复用
     buvid3: String,
     buvid4: String,
-    last_dir: String,
     include_replies: bool,
     /// 是否一并采集动态 / 转发动态 / 专栏 / 音频的评论与原文
     include_dynamics: bool,
@@ -52,8 +64,7 @@ struct Cfg {
     web_port: u16,
     /// 默认导出目录；留空使用应用配置目录下的 exports
     export_dir: String,
-    /// 采集完成后自动导出（重复采集与已有文件增量合并）
-    auto_export: bool,
+    resource_policy: archive::ResourcePolicy,
 }
 
 impl Default for Cfg {
@@ -65,9 +76,6 @@ impl Default for Cfg {
             sessdata: String::new(),
             buvid3: String::new(),
             buvid4: String::new(),
-            last_dir: dirs::desktop_dir()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default(),
             include_replies: true,
             include_dynamics: true,
             ranges: collection::defaults(),
@@ -76,7 +84,7 @@ impl Default for Cfg {
             proxy: String::new(),
             web_port: 8686,
             export_dir: String::new(),
-            auto_export: false,
+            resource_policy: archive::ResourcePolicy::default(),
         }
     }
 }
@@ -104,9 +112,6 @@ impl Cfg {
                                 "无法读取登录信息，请解锁系统凭据库或重新登录；原凭证已保留",
                             );
                         }
-                    }
-                    if let Some(s) = v["last_dir"].as_str() {
-                        cfg.last_dir = s.to_string();
                     }
                     if let Some(b) = v["include_replies"].as_bool() {
                         cfg.include_replies = b;
@@ -141,9 +146,8 @@ impl Cfg {
                     if let Some(s) = v["export_dir"].as_str() {
                         cfg.export_dir = s.to_string();
                     }
-                    if let Some(b) = v["auto_export"].as_bool() {
-                        cfg.auto_export = b;
-                    }
+                    if let Ok(policy)=serde_json::from_value(v["resource_policy"].clone()){cfg.resource_policy=policy;}
+
                 }
             }
         }
@@ -163,7 +167,6 @@ impl Cfg {
 
     fn save_to(&mut self, path: &std::path::Path) -> Result<()> {
         let mut v = serde_json::json!({
-            "last_dir": self.last_dir,
             "include_replies": self.include_replies,
             "include_dynamics": self.include_dynamics,
             "collection_ranges": self.ranges,
@@ -172,7 +175,7 @@ impl Cfg {
             "proxy": self.proxy,
             "web_port": self.web_port,
             "export_dir": self.export_dir,
-            "auto_export": self.auto_export,
+            "resource_policy": self.resource_policy,
         });
         let secrets = secure::Secrets {
             sessdata: self.sessdata.clone(),
@@ -215,6 +218,13 @@ fn report_config_error(message: &str) {
 // ---------------- 共享状态 ----------------
 struct Shared {
     doc: Arc<Mutex<ArchiveDoc>>,
+    messages: Arc<Mutex<messages::Store>>,
+    range_session: Mutex<range_ui::Session>,
+    range_batch: std::sync::atomic::AtomicU64,
+    message_active: AtomicBool,
+    offline: AtomicBool,
+    message_view_pending: std::sync::atomic::AtomicU64,
+    active_task: AtomicUsize,
     rows: Mutex<Vec<(Video, bool)>>,
     cancel: AtomicBool,
     /// 停止意图：true=暂停（保留断点，下次「继续采集」从这里接上）；false=结束（清断点）
@@ -225,6 +235,7 @@ struct Shared {
     qr_gen: AtomicUsize,
     cfg: Mutex<Cfg>,
     account_uid: std::sync::atomic::AtomicU64,
+    public_account: Arc<Mutex<account_ui::PublicAccount>>,
     checkpoint: Mutex<Option<checkpoint::Task>>,
     log: Mutex<String>,
     last_export: Mutex<Option<PathBuf>>,
@@ -232,8 +243,15 @@ struct Shared {
 
 impl Shared {
     fn new(cfg: Cfg) -> Self {
-        Self {
+        let range_session = Mutex::new(range_ui::Session::new(&cfg.ranges));
+        Self { range_session, range_batch: std::sync::atomic::AtomicU64::new(0),
             doc: Arc::new(Mutex::new(ArchiveDoc::default())),
+            messages: Arc::new(Mutex::new(messages::Store::default())),
+            message_active: AtomicBool::new(false),
+            offline: AtomicBool::new(false),
+            message_view_pending: std::sync::atomic::AtomicU64::new(0),
+            active_task: AtomicUsize::new(0),
+            public_account: Arc::new(Mutex::new(account_ui::PublicAccount::default())),
             rows: Mutex::new(Vec::new()),
             cancel: AtomicBool::new(false),
             pause_requested: AtomicBool::new(false),
@@ -259,6 +277,7 @@ fn apply_saved_fingerprint(client: &mut bili::Bili) {
 
 /// 建客户端：Cookie + 设备指纹（首次运行会自动取一份并记进配置）
 fn make_client(shared: &Arc<Shared>) -> Result<bili::Bili> {
+    anyhow::ensure!(!shared.offline.load(Ordering::SeqCst),"离线账号不能调用账号采集接口");
     let (cookie, b3, b4, interval_min, interval_max) = {
         let c = shared.cfg.lock().unwrap();
         (
@@ -290,13 +309,15 @@ fn make_client(shared: &Arc<Shared>) -> Result<bili::Bili> {
 
 // ---------------- 后台命令 ----------------
 enum Cmd {
-    ReadArchives,
+    Offline(offline::Action),
+    EnsureMessageView {uid:u64},
+    Messages(messages_ui::Action),
+    ReadArchives { cookie: String, batch: u64 },
     AddVideos(Vec<String>),
     Start,
     CrawlUp,
-    QueryTotals(Vec<u32>),
-    SplitImport(Vec<PathBuf>),
-    Import(Vec<PathBuf>),
+    QueryTotals { types: Vec<u32>, uid: u64, cookie: String, batch: u64 },
+    ProcessResources,
     Export { path: PathBuf },
 }
 
@@ -331,6 +352,22 @@ fn push_log(shared: &Arc<Shared>, ui: &Weak<AppWindow>, msg: impl AsRef<str>) {
     emit(ui, move |w| w.set_log_text(text.into()));
 }
 
+// 0 = no cancellable task, 1 = comments, 2 = messages, 3 = resources.
+fn set_active_task(shared:&Arc<Shared>,ui:&Weak<AppWindow>,task_type:usize) {
+    shared.active_task.store(task_type,Ordering::SeqCst);emit(ui,move|w|w.set_active_task(task_type as i32));
+}
+struct TaskGuard {shared:Arc<Shared>,ui:Weak<AppWindow>}
+impl TaskGuard {
+    fn begin(shared:&Arc<Shared>,ui:&Weak<AppWindow>,task_type:usize)->Option<Self> {
+        if task_type==0 {return None;}
+        if shared.active_task.load(Ordering::SeqCst)==0 {shared.cancel.store(false,Ordering::SeqCst);shared.pause_requested.store(false,Ordering::SeqCst);}
+        set_active_task(shared,ui,task_type);set_busy(shared,ui,true);
+        Some(Self{shared:Arc::clone(shared),ui:ui.clone()})
+    }
+}
+impl Drop for TaskGuard {
+    fn drop(&mut self) {set_active_task(&self.shared,&self.ui,0);set_busy(&self.shared,&self.ui,false);}
+}
 fn set_busy(shared: &Arc<Shared>, ui: &Weak<AppWindow>, busy: bool) {
     shared.busy.store(busy, Ordering::SeqCst);
     emit(ui, move |w| w.set_busy(busy));
@@ -477,6 +514,7 @@ fn run_qr_login(
                                 }
                                 cfg.save_reported();
                             }
+                            enqueue_archive_read(&shared,&ui,&tx);
                             let cookie_ui = cookie.clone();
                             emit(&ui, move |w| {
                                 w.set_qr_visible(false);
@@ -493,7 +531,6 @@ fn run_qr_login(
                                     "登录成功（设备指纹已保存），正在读取稿件…".to_string()
                                 },
                             );
-                            let _ = tx.send(Cmd::ReadArchives);
                             return;
                         }
                     }
@@ -512,34 +549,15 @@ fn run_qr_login(
 
 fn refresh_rows(shared: &Arc<Shared>, ui: &Weak<AppWindow>) {
     let rows = shared.rows.lock().unwrap();
-    let list: Vec<VideoRow> = rows
-        .iter()
-        .enumerate()
-        .map(|(i, (v, checked))| VideoRow {
-            index: i as i32,
-            bvid: v.bvid.clone().into(),
-            title: v.title.clone().into(),
-            meta: {
-                let id = if v.bvid.is_empty() {
-                    format!("av{}", v.aid)
-                } else {
-                    v.bvid.clone()
-                };
-                let time = if v.publish_time_text.is_empty() {
-                    "未知时间".to_string()
-                } else {
-                    v.publish_time_text.clone()
-                };
-                if v.comment_total > 0 {
-                    format!("{} · {} 评论 · {}", id, human_count(v.comment_total), time)
-                } else {
-                    format!("{} · {}", id, time)
-                }
-            }
-            .into(),
-            checked: *checked,
-        })
-        .collect();
+    let list: Vec<VideoRow> = content_rows::sorted_indices(&rows).into_iter().map(|index| {
+        let (v,checked)=&rows[index];let identity=content_rows::identity(v);
+        VideoRow {
+            index:index as i32, bvid:v.bvid.clone().into(),
+            title:if v.title.trim().is_empty(){identity.clone()}else{v.title.clone()}.into(),
+            meta:if v.comment_total>0 {format!("{} · {} 评论 · {}",identity,human_count(v.comment_total),content_rows::time_label(v))}else{format!("{} · {}",identity,content_rows::time_label(v))}.into(),
+            checked:*checked,
+        }
+    }).collect();
     let selected = rows.iter().filter(|(_, c)| *c).count();
     drop(rows);
     emit(ui, move |w| {
@@ -551,8 +569,6 @@ fn refresh_rows(shared: &Arc<Shared>, ui: &Weak<AppWindow>) {
 fn refresh_stats(shared: &Arc<Shared>, ui: &Weak<AppWindow>) {
     let doc = shared.doc.lock().unwrap();
     let stats = doc.stats.clone();
-    let preview = export::to_json(&doc).unwrap_or_default();
-    let preview: String = preview.chars().take(PREVIEW_CHARS).collect();
     let has = stats.comments > 0;
     drop(doc);
     emit(ui, move |w| {
@@ -561,7 +577,6 @@ fn refresh_stats(shared: &Arc<Shared>, ui: &Weak<AppWindow>) {
         w.set_stat_comments(stats.comments as i32);
         w.set_stat_replies(stats.replies as i32);
         w.set_stat_likes(human_count(stats.likes).into());
-        w.set_preview_text(preview.into());
         w.set_has_data(has);
     });
 }
@@ -573,8 +588,9 @@ fn default_export_name() -> String {
     )
 }
 
-/// 自动导出的固定文件名：同名才能做增量合并
+/// 读取现有分类归档所用的根目录。
 fn export_dir_of(cfg: &Cfg) -> String {
+    if let Some(active)=library::active(){return active.root.to_string_lossy().into_owned();}
     if !cfg.export_dir.trim().is_empty() {
         return cfg.export_dir.trim().to_string();
     }
@@ -607,30 +623,51 @@ fn web_running(ui: &Weak<AppWindow>, running: bool) {
     emit(ui, move |w| w.set_web_running(running));
 }
 
-/// 启动服务；open_browser 控制是否顺手打开浏览器，require_data 用于「打开网页」入口
+fn preview_url(base: &str, workspace: i32) -> String {
+    format!("{}/{}", base.trim_end_matches('/'), if workspace == 1 { "messages" } else { "" })
+}
+
+#[cfg(test)]
+mod preview_route_tests {
+    #[test] fn current_workspace_determines_preview_path() {
+        assert_eq!(super::preview_url("http://127.0.0.1:8686/",0),"http://127.0.0.1:8686/");
+        assert_eq!(super::preview_url("http://127.0.0.1:8686/",1),"http://127.0.0.1:8686/messages");
+        assert_eq!(super::preview_url("http://127.0.0.1:9000",1),"http://127.0.0.1:9000/messages");
+    }
+}
+
+/// 服务基础地址与工作区路由分离，打开时读取当前工作区。
 fn ensure_web(
     shared: &Arc<Shared>,
     ui: &Weak<AppWindow>,
     cache: &Arc<Mutex<Option<WebHandle>>>,
     port: u16,
     open_browser: bool,
-    require_data: bool,
 ) {
+    let workspace = ui.upgrade().map(|w| w.get_workspace()).unwrap_or(0);
     if let Some(url) = cache.lock().unwrap().as_ref().map(|h| h.url.clone()) {
         if open_browser {
-            push_log(shared, ui, format!("预览已在运行：{}", url));
-            let _ = webbrowser::open(&url);
+            let _ = webbrowser::open(&preview_url(&url, workspace));
         }
-        return;
-    }
-    if require_data && shared.doc.lock().unwrap().stats.videos == 0 {
-        push_log(shared, ui, "还没有数据，先采集或导入再预览");
-        set_foot(ui, "还没有数据".into());
         return;
     }
     let doc = shared.doc.clone();
     let stop = Arc::new(AtomicBool::new(false));
-    match web::spawn_with_stop(doc, port, stop.clone()) {
+    let weak_shared = Arc::downgrade(shared);
+    let credentials: message_subjects::Credentials = Arc::new(move |uid| {
+        let shared = weak_shared.upgrade()?;
+        let cfg = shared.cfg.lock().unwrap();
+        if shared.offline.load(Ordering::SeqCst) || shared.account_uid.load(Ordering::SeqCst).to_string() != uid || cfg.sessdata.is_empty() { return None; }
+        Some(cfg.sessdata.clone())
+    });
+    let weak_shared = Arc::downgrade(shared);
+    let pacing: message_profiles::Pacing = Arc::new(move || {
+        weak_shared.upgrade().map(|shared| {
+            let cfg = shared.cfg.lock().unwrap();
+            (cfg.interval_ms.max(0) as u64, cfg.interval_max_ms.max(0) as u64)
+        }).unwrap_or((1800, 2400))
+    });
+    match web::spawn_with_profile_pacing(doc, shared.messages.clone(), shared.public_account.clone(), port, stop.clone(), credentials, pacing) {
         Ok(port) => {
             let url = format!("http://127.0.0.1:{}/", port);
             *cache.lock().unwrap() = Some(WebHandle {
@@ -640,14 +677,15 @@ fn ensure_web(
             push_log(
                 shared,
                 ui,
-                format!("网页服务已启动：{}（关掉程序即停）", url),
+                format!("网页服务已启动：{}", url),
             );
             set_status(ui, "网页预览已启动".into(), true);
+            set_foot(ui, format!("网页服务已启动：{}", url));
             let address = url.clone();
             emit(ui, move |w| w.set_web_address(address.into()));
             web_running(ui, true);
             if open_browser {
-                let _ = webbrowser::open(&url);
+                let _ = webbrowser::open(&preview_url(&url, workspace));
             }
         }
         Err(e) => {
@@ -675,43 +713,75 @@ fn stop_web(shared: &Arc<Shared>, ui: &Weak<AppWindow>, cache: &Arc<Mutex<Option
     }
 }
 
-/// Export only the current task's objects, one stable archive per author/type/ID.
-fn auto_export(shared: &Arc<Shared>, ui: &Weak<AppWindow>, videos: &[Video]) {
-    let (enabled, dir) = {
-        let cfg = shared.cfg.lock().unwrap();
-        (cfg.auto_export, export_dir_of(&cfg))
-    };
-    if !enabled {
-        return;
+#[derive(Debug)]
+struct CommentArchiveFailure;
+impl std::fmt::Display for CommentArchiveFailure {
+    fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result {write!(f,"评论自动归档或断点写入失败，已停止采集")}
+}
+impl std::error::Error for CommentArchiveFailure {}
+fn persist_comment_progress(root:&std::path::Path,task:&checkpoint::Task,videos:&[Video])->Result<usize> {
+    export::persist_comments(root,task.uid,videos,||task.save()).context(CommentArchiveFailure)
+}
+fn comment_archive_failure(shared:&Arc<Shared>,ui:&Weak<AppWindow>,task:&checkpoint::Task,error:impl std::fmt::Display) {
+    active_task(shared,ui,task);
+    let text=format!("评论自动归档失败，断点已保留：{}",error);
+    push_log(shared,ui,&text);set_foot(ui,text.clone());set_status(ui,text.clone(),false);set_progress(ui,0.0,text);set_busy(shared,ui,false);
+}
+
+/// Optional offline resources are independent of manual JSON export.
+fn process_comment_resources(shared:&Arc<Shared>,ui:&Weak<AppWindow>,videos:&[Video],dir:&std::path::Path) {
+    if shared.cancel.load(Ordering::SeqCst) {return;}
+    let (policy,low,high)={let cfg=shared.cfg.lock().unwrap();(cfg.resource_policy.clone(),cfg.interval_ms.max(0)as u64,cfg.interval_max_ms.max(0)as u64)};
+    if policy.avatars||policy.covers||policy.content_images {
+        set_active_task(shared,ui,3);set_busy(shared,ui,true);
+        let mut snapshot=ArchiveDoc::default();snapshot.videos=videos.to_vec();let uid=shared.account_uid.load(Ordering::SeqCst);let root=archive::root(dir);let mut resources=archive::from_comments(&snapshot,uid,&root,policy);
+        if let Err(error)=archive::process_resources(&mut resources,&root,&shared.cancel,|url,path|{messages::pause(Duration::from_millis(bili::random_delay_ms(low,high)),&shared.cancel)?;messages::download(url,path,&shared.cancel)},|n,total,saved,failed,_|set_progress(ui,if total==0{1.0}else{n as f32/total as f32},format!("资源 {n}/{total} · 已保存 {saved} / 失败 {failed}"))){push_log(shared,ui,error.to_string());}
     }
-    let mut ok = 0;
-    let mut failed = 0;
-    for video in videos {
-        match export::export_item(std::path::Path::new(&dir), video) {
-            Ok(_) => ok += 1,
-            Err(e) => {
-                failed += 1;
-                push_log(
-                    shared,
-                    ui,
-                    format!("稿件 {} 自动导出失败：{}", video.aid, e),
-                );
-            }
-        }
+}
+
+/// Each queued request owns only its loading flags, even across account resets.
+struct RangeReadGuard {shared:Arc<Shared>,ui:Weak<AppWindow>,batch:u64}
+impl RangeReadGuard {
+    fn new(shared:&Arc<Shared>,ui:&Weak<AppWindow>,batch:u64)->Self {Self{shared:shared.clone(),ui:ui.clone(),batch}}
+}
+impl Drop for RangeReadGuard {
+    fn drop(&mut self){
+        self.shared.range_session.lock().unwrap().finish(self.batch);
+        render_range_session(&self.shared,&self.ui);
     }
-    if ok > 0 {
-        *shared.last_export.lock().unwrap() = Some(PathBuf::from(&dir));
+}
+fn begin_range_read(shared:&Arc<Shared>,ui:&Weak<AppWindow>,types:&[u32])->u64 {
+    let batch=shared.range_batch.fetch_add(1,Ordering::SeqCst).wrapping_add(1);
+    shared.range_session.lock().unwrap().begin(batch,types);
+    render_range_session(shared,ui);batch
+}
+fn enqueue_archive_read(shared:&Arc<Shared>,ui:&Weak<AppWindow>,tx:&std::sync::mpsc::Sender<Cmd>)->bool {
+    if shared.offline.load(Ordering::SeqCst){return false;}
+    let cookie=shared.cfg.lock().unwrap().sessdata.clone();
+    if cookie.trim().is_empty(){return false;}
+    let batch=begin_range_read(shared,ui,&collection::TYPES);
+    if tx.send(Cmd::ReadArchives{cookie,batch}).is_err(){
+        shared.range_session.lock().unwrap().finish(batch);render_range_session(shared,ui);return false;
     }
-    let message = format!("自动导出：成功 {}，失败 {} · {}", ok, failed, dir);
-    push_log(shared, ui, &message);
-    set_foot(ui, message);
+    true
 }
 
 fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
     while let Ok(cmd) = rx.recv() {
+        let cmd=match cmd {Cmd::Offline(action)=>{offline::run(action,&shared,&ui);continue;},other=>other};
+        if let Cmd::EnsureMessageView{uid}=&cmd {
+            messages_ui::ensure_view(*uid,&shared,&ui);
+            continue;
+        }
+        let task_type=match &cmd {Cmd::Start|Cmd::CrawlUp=>1,Cmd::ProcessResources=>3,_=>0};
+        let _task=TaskGuard::begin(&shared,&ui,task_type);
         match cmd {
-            Cmd::ReadArchives => {
-                let cookie = shared.cfg.lock().unwrap().sessdata.clone();
+            Cmd::Offline(_)=>unreachable!("offline actions are handled separately"),
+            Cmd::EnsureMessageView{..} => unreachable!("view requests are handled before task state changes"),
+            Cmd::Messages(action) => messages_ui::run(action, &shared, &ui),
+            Cmd::ReadArchives {cookie,batch} => {
+                let _range_loading=RangeReadGuard::new(&shared,&ui,batch);
+                if shared.cfg.lock().unwrap().sessdata!=cookie {continue;}
                 let expected_cookie = cookie.clone();
                 if cookie.trim().is_empty() {
                     push_log(&shared, &ui, "请先扫码登录，再试");
@@ -729,20 +799,25 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                     }
                 };
                 match client.login_state() {
-                    Ok((true, uname, mid)) => {
+                    Ok(profile) if profile.logged_in && profile.uid > 0 => {
+                        let mid = profile.uid;
+                        let uname = profile.name.clone();
                         if shared.cfg.lock().unwrap().sessdata != expected_cookie {
                             set_busy(&shared, &ui, false);
                             continue;
                         }
-                        set_account(&shared, &ui, mid);
+                        set_account_with_loading(&shared, &ui, mid, true);
                         set_status(&ui, format!("已连接 · {}", uname), true);
                         let who = uname.clone();
-                        emit(&ui, move |w| {
-                            w.set_account_text(format!("已登录：{}（UID {}）", uname, mid).into())
-                        });
+                        account_ui::publish(&shared, &ui, profile, expected_cookie.clone());
                         push_log(&shared, &ui, format!("账号校验通过：{}", who));
                     }
-                    Ok((false, _, _)) => {
+                    Ok(_) => {
+                        if shared.cfg.lock().unwrap().sessdata != expected_cookie {
+                            set_busy(&shared, &ui, false);
+                            continue;
+                        }
+                        set_account(&shared, &ui, 0);
                         set_status(&ui, "Cookie 无效".into(), false);
                         push_log(&shared, &ui, "SESSDATA 未登录或已过期");
                         set_busy(&shared, &ui, false);
@@ -757,49 +832,45 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                 }
 
                 let uid = shared.account_uid.load(Ordering::SeqCst);
-                {
-                    let _local_read=LocalReadGuard::begin(&shared,&ui);
-                    load_history(&shared, &ui, uid, &expected_cookie);
-                    if shared.cfg.lock().unwrap().sessdata != expected_cookie {
-                        set_busy(&shared, &ui, false);
-                        continue;
-                    }
-                    restore_checkpoint(&shared, &ui, uid);
-                }
-
-                set_progress(&ui, 0.1, "正在读取线上稿件…".into());
-                let mut all: Vec<Video> = Vec::new();
-                let mut pn = 1u64;
-                let ps = 50u64;
-                let mut total = 0u64;
-                loop {
-                    match client.archives_page(pn, ps) {
-                        Ok((list, t)) => {
-                            total = t;
-                            let n = list.len();
-                            all.extend(list);
-                            push_log(&shared, &ui, format!("读取稿件第 {} 页，获得 {} 条", pn, n));
-                            set_progress(
-                                &ui,
-                                if total > 0 {
-                                    (all.len() as f32 / total as f32).min(1.0)
-                                } else {
-                                    0.5
-                                },
-                                format!("稿件 {}/{}", all.len(), total),
-                            );
-                            if n == 0 || all.len() as u64 >= total || pn >= 12 {
+                let (all, total) = std::thread::scope(|scope| {
+                    let local = scope.spawn(|| {
+                        load_startup_archives(&shared, &ui, uid, &expected_cookie);
+                    });
+                    set_progress(&ui, 0.1, "正在读取线上稿件…".into());
+                    let mut all: Vec<Video> = Vec::new();
+                    let mut pn = 1u64;
+                    let ps = 50u64;
+                    let mut total = 0u64;
+                    loop {
+                        match client.archives_page(pn, ps) {
+                            Ok((list, t)) => {
+                                total = t;
+                                let n = list.len();
+                                all.extend(list);
+                                set_progress(
+                                    &ui,
+                                    if total > 0 {
+                                        (all.len() as f32 / total as f32).min(1.0)
+                                    } else {
+                                        0.5
+                                    },
+                                    format!("稿件 {}/{}", all.len(), total),
+                                );
+                                if n == 0 || all.len() as u64 >= total || pn >= 12 {
+                                    break;
+                                }
+                                pn += 1;
+                                std::thread::sleep(client.next_pause());
+                            }
+                            Err(e) => {
+                                push_log(&shared, &ui, format!("读取稿件失败：{}", e));
                                 break;
                             }
-                            pn += 1;
-                            std::thread::sleep(client.next_pause());
-                        }
-                        Err(e) => {
-                            push_log(&shared, &ui, format!("读取稿件失败：{}", e));
-                            break;
                         }
                     }
-                }
+                    local.join().expect("startup archive reader panicked");
+                    (all, total)
+                });
 
                 if all.is_empty() {
                     push_log(&shared, &ui, "没有读到稿件，请检查 SESSDATA 或稍后重试");
@@ -827,60 +898,35 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                 sync_history_rows(&shared);
                 refresh_stats(&shared, &ui);
                 refresh_rows(&shared, &ui);
-                push_log(
-                    &shared,
-                    &ui,
-                    format!(
-                        "共 {} 个稿件，勾选后点「开始采集」",
-                        shared.rows.lock().unwrap().len()
-                    ),
-                );
                 set_progress(&ui, 1.0, format!("稿件 {}", total));
                 set_foot(&ui, "稿件已载入，勾选后开始采集".into());
 
-                let enabled = shared
-                    .cfg
-                    .lock()
-                    .unwrap()
-                    .ranges
-                    .iter()
-                    .filter_map(|(&ty, r)| r.enabled.then_some(ty))
-                    .collect::<Vec<_>>();
-                query_type_totals(&shared, &ui, &client, &enabled, &expected_cookie, uid);
+                query_type_totals(&shared, &ui, &client, &collection::TYPES, &expected_cookie, uid, batch);
                 set_busy(&shared, &ui, false);
             }
 
-            Cmd::QueryTotals(types) => {
-                let expected = shared.cfg.lock().unwrap().sessdata.clone();
-                let uid = shared.account_uid.load(Ordering::SeqCst);
-                if uid == 0 || expected.is_empty() {
+            Cmd::QueryTotals { types, uid, cookie: expected, batch } => {
+                let _range_loading=RangeReadGuard::new(&shared,&ui,batch);
+                if uid == 0 || expected.is_empty() || shared.account_uid.load(Ordering::SeqCst) != uid || shared.cfg.lock().unwrap().sessdata != expected {
                     continue;
                 }
                 match make_client(&shared) {
-                    Ok(client) => query_type_totals(&shared, &ui, &client, &types, &expected, uid),
-                    Err(e) => push_log(&shared, &ui, format!("获取类型总数失败：{}", e)),
+                    Ok(client) => query_type_totals(&shared, &ui, &client, &types, &expected, uid, batch),
+                    Err(e) => {
+                        push_log(&shared,&ui,format!("获取类型总数失败：{}",e));
+                    },
                 }
             }
-            Cmd::SplitImport(files) => {
-                set_busy(&shared, &ui, true);
-                let root = {
-                    let cfg = shared.cfg.lock().unwrap();
-                    export_dir_of(&cfg)
-                };
-                let report = export::split_import(&files, std::path::Path::new(&root));
-                for error in report.errors {
-                    push_log(&shared, &ui, error);
-                }
-                let message = format!(
-                    "导入拆解：保存 {} 个稿件，失败/跳过 {} 项 · {}",
-                    report.saved, report.failed, root
-                );
-                if report.saved > 0 {
-                    *shared.last_export.lock().unwrap() = Some(PathBuf::from(&root));
-                }
-                push_log(&shared, &ui, &message);
-                set_foot(&ui, message);
-                set_busy(&shared, &ui, false);
+            Cmd::ProcessResources => {
+                set_busy(&shared,&ui,true);shared.message_active.store(true,Ordering::SeqCst);emit(&ui,|w|w.set_message_active(true));
+                let (root,policy,low,high)={let cfg=shared.cfg.lock().unwrap();(archive::root(std::path::Path::new(&export_dir_of(&cfg))),cfg.resource_policy.clone(),cfg.interval_ms.max(0)as u64,cfg.interval_max_ms.max(0)as u64)};
+                let uid=shared.account_uid.load(Ordering::SeqCst);
+                let snapshot=shared.doc.lock().unwrap().clone();let mut document=archive::from_comments(&snapshot,uid,&root,policy);
+                let result=archive::process_resources(&mut document,&root,&shared.cancel,|url,path|{messages::pause(Duration::from_millis(bili::random_delay_ms(low,high)),&shared.cancel)?;messages::download(url,path,&shared.cancel)},|n,total,saved,failed,_|set_progress(&ui,if total==0{1.0}else{n as f32/total as f32},format!("资源 {n}/{total} · 已保存 {saved} / 失败 {failed}")));
+                if let Err(error)=result{push_log(&shared,&ui,error.to_string());}
+                set_busy(&shared,&ui,false);
+                shared.message_active.store(false,Ordering::SeqCst);emit(&ui,|w|w.set_message_active(false));
+                if uid>0 && !shared.cancel.load(Ordering::SeqCst) {messages_ui::run(messages_ui::Action::Attachments(uid),&shared,&ui);}else{set_foot(&ui,if shared.cancel.load(Ordering::SeqCst){"资源处理已暂停或结束，已保存进度保留".into()}else{"评论资源处理完成；登录后可处理账号消息资源".into()});}
             }
             Cmd::AddVideos(items) => {
                 set_busy(&shared, &ui, true);
@@ -924,7 +970,7 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
             }
 
             Cmd::Start => {
-                let targets: Vec<Video> = shared
+                let mut targets: Vec<Video> = shared
                     .rows
                     .lock()
                     .unwrap()
@@ -936,7 +982,21 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                     push_log(&shared, &ui, "请先勾选稿件");
                     continue;
                 }
+                {
+                    let doc = shared.doc.lock().unwrap();
+                    let saved: HashMap<_, _> = doc.videos.iter()
+                        .map(|video| ((video.reply_type(), video.aid), &video.comments))
+                        .collect();
+                    for target in &mut targets {
+                        if target.comments.is_empty() {
+                            if let Some(comments) = saved.get(&(target.reply_type(), target.aid)) {
+                                target.comments = (**comments).clone();
+                            }
+                        }
+                    }
+                }
                 let cfg = shared.cfg.lock().unwrap().clone();
+                let output_root=PathBuf::from(export_dir_of(&cfg));
                 let mut client = match make_client(&shared) {
                     Ok(c) => c,
                     Err(e) => {
@@ -964,10 +1024,10 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                         continue;
                     }
                 };
-                if let Err(e) = task.save() {
-                    push_log(&shared, &ui, format!("无法保存采集进度：{}", e));
-                    continue;
+                if let Err(error)=persist_comment_progress(&output_root,&task,&task.doc().videos) {
+                    comment_archive_failure(&shared,&ui,&task,format!("{error:#}"));continue;
                 }
+                push_log(&shared,&ui,format!("评论自动归档目录：{}",archive::root(&output_root).join(task.uid.to_string()).join("comments").display()));
                 {
                     let mut rows = shared.rows.lock().unwrap();
                     for target in &task.targets {
@@ -980,8 +1040,7 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                     }
                 }
                 active_task(&shared, &ui, &task);
-                shared.cancel.store(false, Ordering::SeqCst);
-                shared.pause_requested.store(false, Ordering::SeqCst);
+
                 set_busy(&shared, &ui, true);
                 let mut failed = false;
                 for index in 0..task.targets.len() {
@@ -1004,9 +1063,10 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                             if shared.cfg.lock().unwrap().sessdata != cfg.sessdata {
                                 anyhow::bail!("登录账号已变更，原任务已保留");
                             }
-                            task.targets[index] = v.clone();
-                            task.cursors.insert(key.clone(), cursor.clone());
-                            task.save()?;
+                            let mut next=task.clone();
+                            next.targets[index]=v.clone();next.cursors.insert(key.clone(),cursor.clone());
+                            persist_comment_progress(&output_root,&next,std::slice::from_ref(v))?;
+                            task=next;
                             active_task(&shared, &ui, &task);
                             {
                                 shared.doc.lock().unwrap().merge_video(v.clone());
@@ -1024,31 +1084,27 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                             Ok(())
                         },
                     );
-                    task.targets[index] = video.clone();
-                    task.cursors.insert(key.clone(), cursor);
-                    shared.doc.lock().unwrap().merge_video(video);
+                    shared.doc.lock().unwrap().merge_video(video.clone());
                     match result {
-                        Ok(()) => {
-                            task.done.push(key);
-                            if let Err(e) = task.save() {
-                                push_log(&shared, &ui, format!("保存采集进度失败：{}", e));
-                                failed = true;
-                                break;
+                        Ok(())=>{
+                            let mut next=task.clone();next.targets[index]=video.clone();next.cursors.insert(key.clone(),cursor);next.done.push(key);
+                            if let Err(error)=persist_comment_progress(&output_root,&next,std::slice::from_ref(&video)) {
+                                push_log(&shared,&ui,format!("{error:#}"));failed=true;break;
                             }
-                        }
-                        Err(e) => {
-                            if !shared.cancel.load(Ordering::SeqCst) {
-                                push_log(&shared, &ui, format!("采集失败，进度已保留：{}", e));
-                                failed = true;
+                            task=next;
+                        },
+                        Err(error)=>{
+                            if error.is::<CommentArchiveFailure>() || !shared.cancel.load(Ordering::SeqCst) {
+                                push_log(&shared,&ui,format!("采集失败，进度已保留：{error:#}"));failed=true;
                             }
                             break;
                         }
                     }
                     refresh_stats(&shared, &ui);
                 }
-                let stopped = shared.cancel.load(Ordering::SeqCst)
+                let stopped = !failed && shared.cancel.load(Ordering::SeqCst)
                     && !shared.pause_requested.load(Ordering::SeqCst);
-                let complete = task.complete();
+                let complete = !failed && task.complete();
                 if complete || stopped {
                     clear_checkpoint(&shared, &ui);
                 } else {
@@ -1068,11 +1124,12 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                 set_progress(&ui, if complete { 1.0 } else { 0.0 }, message.into());
                 push_log(&shared, &ui, message);
                 set_foot(&ui, message.into());
-                auto_export(&shared, &ui, &task.targets);
+                if !failed {process_comment_resources(&shared, &ui, &task.targets,&output_root);}
             }
 
             Cmd::CrawlUp => {
                 let cfg = shared.cfg.lock().unwrap().clone();
+                let output_root=PathBuf::from(export_dir_of(&cfg));
                 if cfg.sessdata.trim().is_empty() {
                     push_log(&shared, &ui, "全量模式需要登录：请先扫码登录");
                     set_foot(&ui, "尚未登录".into());
@@ -1101,8 +1158,6 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                     });
                 }
 
-                shared.cancel.store(false, Ordering::SeqCst);
-                shared.pause_requested.store(false, Ordering::SeqCst);
                 set_busy(&shared, &ui, true);
 
                 let mut task = match checkpoint::Task::new(
@@ -1120,15 +1175,15 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                         continue;
                     }
                 };
-                if let Err(e) = task.save() {
-                    push_log(&shared, &ui, format!("无法保存采集进度：{}", e));
-                    set_busy(&shared, &ui, false);
-                    continue;
+                if let Err(error)=persist_comment_progress(&output_root,&task,&task.doc().videos) {
+                    comment_archive_failure(&shared,&ui,&task,format!("{error:#}"));continue;
                 }
+                push_log(&shared,&ui,format!("评论自动归档目录：{}",archive::root(&output_root).join(task.uid.to_string()).join("comments").display()));
                 active_task(&shared, &ui, &task);
                 let pace_min = cfg.interval_ms.clamp(200, 10000) as u64;
                 let pace_max = cfg.interval_max_ms.clamp(200, 10000) as u64;
                 let mut aborted = false;
+                let mut archive_failed=false;
                 for stage_index in 0..task.stages.len() {
                     while !task.stages[stage_index].done {
                         if shared.cancel.load(Ordering::SeqCst) {
@@ -1158,6 +1213,7 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                                     &ui,
                                     format!("{}第 {} 页触发风控，等待 {} 秒", label, page, secs),
                                 );
+                                emit(&ui,|w|{w.set_verify_title("接口触发风控，正在自动等待".into());w.set_verify_wait_label("风控等待".into());});
                                 verify_show(
                                     &ui,
                                     secs,
@@ -1171,29 +1227,17 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                         match result {
                             Ok((page_rows, total)) => {
                                 verify_hide(&ui);
-                                set_type_total(&ui, ty, Some(total));
-                                task.accept(ty, page, page_rows, total);
-                                if let Err(e) = task.save() {
-                                    push_log(
-                                        &shared,
-                                        &ui,
-                                        format!("保存采集进度失败，已停止：{}", e),
-                                    );
-                                    aborted = true;
-                                    break;
+                                set_type_total(&shared, &ui, ty, Some(total));
+                                let changed:HashSet<_>=page_rows.iter().map(|row|(row.ty.max(1),row.oid)).collect();
+                                let mut next=task.clone();next.accept(ty,page,page_rows,total);
+                                let partial:Vec<_>=bili::rows_to_videos(&next.rows,cfg.include_replies,self_mid,&self_name).into_iter().filter(|v|changed.contains(&(v.reply_type(),v.aid))).collect();
+                                if let Err(error)=persist_comment_progress(&output_root,&next,&partial) {
+                                    push_log(&shared,&ui,format!("{error:#}"));archive_failed=true;aborted=true;break;
                                 }
-                                active_task(&shared, &ui, &task);
-                                let partial = bili::rows_to_videos(
-                                    &task.rows,
-                                    cfg.include_replies,
-                                    self_mid,
-                                    &self_name,
-                                );
+                                task=next;active_task(&shared,&ui,&task);
                                 {
-                                    let mut doc = shared.doc.lock().unwrap();
-                                    for video in partial {
-                                        doc.merge_video(video);
-                                    }
+                                    let mut doc=shared.doc.lock().unwrap();
+                                    for video in partial {doc.merge_video(video);}
                                 }
                                 refresh_stats(&shared, &ui);
                             }
@@ -1220,6 +1264,7 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                     }
                 }
                 verify_hide(&ui);
+                if archive_failed {comment_archive_failure(&shared,&ui,&task,"未推进失败页，请检查导出目录后继续采集");continue;}
                 let rows = task.rows.clone();
                 if rows.is_empty() {
                     if task.complete()
@@ -1361,6 +1406,10 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                     }
                 }
 
+                // Save supplemented titles, content and IP data before clearing a completed task.
+                if let Err(error)=persist_comment_progress(&output_root,&task,&videos) {
+                    comment_archive_failure(&shared,&ui,&task,format!("{error:#}"));continue;
+                }
                 let exported = videos.clone();
                 let hidden = videos.iter().filter(|v| v.is_hidden()).count();
                 {
@@ -1416,46 +1465,7 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                         message, stats.videos, stats.comments, stats.replies
                     ),
                 );
-                auto_export(&shared, &ui, &exported);
-            }
-
-            Cmd::Import(files) => {
-                set_busy(&shared, &ui, true);
-                let mut ok = 0;
-                for (i, path) in files.iter().enumerate() {
-                    set_progress(
-                        &ui,
-                        (i + 1) as f32 / files.len() as f32,
-                        format!("导入 {}/{}", i + 1, files.len()),
-                    );
-                    let name = path
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    match std::fs::read_to_string(path) {
-                        Ok(text) => match export::import_json(&text, &name) {
-                            Ok(videos) => {
-                                let mut doc = shared.doc.lock().unwrap();
-                                for v in videos {
-                                    doc.merge_video(v);
-                                }
-                                push_log(&shared, &ui, format!("导入：{}", name));
-                                ok += 1;
-                            }
-                            Err(e) => push_log(&shared, &ui, format!("{}：{}", name, e)),
-                        },
-                        Err(e) => push_log(&shared, &ui, format!("{}：{}", name, e)),
-                    }
-                }
-                refresh_stats(&shared, &ui);
-                let stats = shared.doc.lock().unwrap().stats.clone();
-                push_log(
-                    &shared,
-                    &ui,
-                    format!("导入完成 {} 个文件，现有 {} 条评论", ok, stats.comments),
-                );
-                set_foot(&ui, format!("现有 {} 条评论", stats.comments));
-                set_busy(&shared, &ui, false);
+                process_comment_resources(&shared, &ui, &exported,&output_root);
             }
 
             Cmd::Export { path } => {
@@ -1473,13 +1483,7 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                         set_foot(&ui, format!("已导出 {}", name));
                         set_status(&ui, "已导出".into(), true);
                         *shared.last_export.lock().unwrap() = Some(path.clone());
-                        let dir = path
-                            .parent()
-                            .map(|p| p.to_string_lossy().to_string())
-                            .unwrap_or_default();
-                        let mut cfg = shared.cfg.lock().unwrap();
-                        cfg.last_dir = dir;
-                        cfg.save_reported();
+
                     }
                     Err(e) => {
                         push_log(&shared, &ui, format!("导出失败：{}", e));
@@ -1573,9 +1577,9 @@ fn run_cli() -> Option<i32> {
     }
     if targets.is_empty() {
         eprintln!("用法:");
-        eprintln!("  bili-comment-hub crawl BV1xx411c7mD [BV...] [--out 文件] [--replies]");
-        eprintln!("  bili-comment-hub crawl --all [--out 文件] [--from 1] [--to 140] [--merge] [--cookie SESSDATA]");
-        eprintln!("  bili-comment-hub serve --file out.json [--port 8686] [--open]");
+        eprintln!("  biliarchive crawl BV1xx411c7mD [BV...] [--out 文件] [--replies]");
+        eprintln!("  biliarchive crawl --all [--out 文件] [--from 1] [--to 140] [--merge] [--cookie SESSDATA]");
+        eprintln!("  biliarchive serve --file out.json [--port 8686] [--open]");
         return Some(2);
     }
 
@@ -1671,6 +1675,7 @@ fn cli_crawl_all(
     };
     apply_saved_fingerprint(&mut client);
     let (mid, name) = client.me();
+    archive::set_account(mid);
     if mid == 0 {
         eprintln!("SESSDATA 无效或已过期");
         return 1;
@@ -1903,16 +1908,16 @@ fn cli_login(args: &[String]) -> i32 {
 }
 
 fn print_help() {
-    println!("BiliCommentHub — 把创作中心评论管理的评论整合成 JSON");
+    println!("BiliArchive — 归档哔哩哔哩稿件评论、私信和互动通知");
     println!();
     println!("用法：");
-    println!("  bili-comment-hub                                    打开图形界面");
+    println!("  biliarchive                                    打开图形界面");
     println!(
-        "  bili-comment-hub login [--no-save]                  扫码登录并写入配置（终端画二维码）"
+        "  biliarchive login [--no-save]                  扫码登录并写入配置（终端画二维码）"
     );
-    println!("  bili-comment-hub crawl BV1xx411c7mD [BV...] [--out 文件] [--replies]");
-    println!("  bili-comment-hub crawl --all [--out 文件] [--from 1] [--to 140] [--merge] [--cookie SESSDATA]");
-    println!("  bili-comment-hub serve --file out.json [--port 8686] [--open]");
+    println!("  biliarchive crawl BV1xx411c7mD [BV...] [--out 文件] [--replies]");
+    println!("  biliarchive crawl --all [--out 文件] [--from 1] [--to 140] [--merge] [--cookie SESSDATA]");
+    println!("  biliarchive serve --file out.json [--port 8686] [--open]");
     println!();
     println!("serve 会在本机起一个网页，把 JSON 列成可浏览的界面：");
     println!("  /              网页列表");
@@ -1951,7 +1956,7 @@ fn cli_serve(args: &[String]) -> i32 {
         }
     }
     if file.is_empty() {
-        eprintln!("用法: bili-comment-hub serve --file out.json [--port 8686] [--open]");
+        eprintln!("用法: biliarchive serve --file out.json [--port 8686] [--open]");
         return 2;
     }
     let path = PathBuf::from(&file);
@@ -2031,15 +2036,15 @@ fn main() -> Result<(), slint::PlatformError> {
 
     ui.set_sessdata(cfg.sessdata.clone().into());
     ui.set_include_replies(cfg.include_replies);
-    set_ui_ranges(&ui, &cfg.ranges);
     ui.set_foot_text("就绪 · 扫码登录，或直接粘贴 BV 号".into());
     ui.set_web_port_text(cfg.web_port.to_string().into());
     ui.set_export_dir_text(export_dir_of(&cfg).into());
-    ui.set_auto_export(cfg.auto_export);
+    ui.set_resource_avatars(cfg.resource_policy.avatars);ui.set_resource_covers(cfg.resource_policy.covers);ui.set_resource_content_images(cfg.resource_policy.content_images);
     ui.set_page_delay_text(cfg.interval_ms.to_string().into());
     ui.set_page_delay_max_text(cfg.interval_max_ms.to_string().into());
 
     let shared = Arc::new(Shared::new(cfg));
+    range_ui::render(&ui, &shared.range_session.lock().unwrap());
     let (tx, rx) = channel::<Cmd>();
     let weak = ui.as_weak();
     let config_error_timer = slint::Timer::default();
@@ -2080,10 +2085,11 @@ fn main() -> Result<(), slint::PlatformError> {
         std::thread::spawn(move || worker(rx, shared, weak));
     }
 
+    offline::install(&ui,&shared,&tx,&weak);
     // Saved credentials use the same validation/listing pipeline as a new login.
-    if !shared.cfg.lock().unwrap().sessdata.trim().is_empty() {
-        let _ = tx.send(Cmd::ReadArchives);
-    }
+    if offline::has_saved_selection(){let _=tx.send(Cmd::Offline(offline::Action::Restore));}else{enqueue_archive_read(&shared,&weak,&tx);}
+    // Apply synchronously before the first window frame, rather than waiting for a worker event.
+    range_ui::render(&ui,&shared.range_session.lock().unwrap());
 
     // ---- 读取稿件 ----
     {
@@ -2091,6 +2097,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let shared = shared.clone();
         let weak = weak.clone();
         ui.on_read_archives(move |sessdata: SharedString| {
+            if shared.offline.load(Ordering::SeqCst){set_foot(&weak,"离线账号不能读取线上稿件".into());return;}
             let value = sessdata.to_string();
             shared.qr_gen.fetch_add(1, Ordering::SeqCst);
             emit(&weak, |w| w.set_qr_visible(false));
@@ -2106,11 +2113,13 @@ fn main() -> Result<(), slint::PlatformError> {
                 cfg.save_reported();
             }
             if value.trim().is_empty() {
+                set_account(&shared,&weak,0);
                 push_log(&shared, &weak, "请先扫码登录，再试");
                 return;
             }
             push_log(&shared, &weak, "正在读取创作中心稿件列表…");
-            let _ = tx.send(Cmd::ReadArchives);
+            enqueue_archive_read(&shared,&weak,&tx);
+            if let Some(w)=weak.upgrade(){range_ui::render(&w,&shared.range_session.lock().unwrap());}
         });
     }
 
@@ -2123,6 +2132,7 @@ fn main() -> Result<(), slint::PlatformError> {
             if shared.busy.load(Ordering::SeqCst) {
                 return;
             }
+            offline::leave(&shared,&weak);
             let my_gen = shared.qr_gen.fetch_add(1, Ordering::SeqCst) + 1;
             emit(&weak, |w| {
                 w.set_qr_visible(true);
@@ -2197,6 +2207,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let shared = shared.clone();
         let weak = weak.clone();
         ui.on_start(move || {
+            if shared.offline.load(Ordering::SeqCst){set_foot(&weak,"请先在线验证原账号后采集".into());return;}
             if shared.busy.load(Ordering::SeqCst) {
                 return;
             }
@@ -2206,7 +2217,7 @@ fn main() -> Result<(), slint::PlatformError> {
             let scope = w.get_scope();
             let mut cfg = shared.cfg.lock().unwrap();
             if scope == 0 {
-                let ranges = match ranges_from_ui(&w) {
+                let mut ranges = match ranges_from_ui(&w) {
                     Ok(r) => r,
                     Err(e) => {
                         drop(cfg);
@@ -2214,6 +2225,11 @@ fn main() -> Result<(), slint::PlatformError> {
                         return;
                     }
                 };
+                for (&ty,state) in &shared.range_session.lock().unwrap().ranges {
+                    if !state.available() {
+                        let mut saved=state.disabled_preference().or_else(||cfg.ranges.get(&ty).cloned()).unwrap_or_default();saved.enabled=false;ranges.insert(ty,saved);
+                    }
+                }
                 if let Err(e) = collection::validate(&ranges, true) {
                     drop(cfg);
                     port_alert(&weak, e.to_string());
@@ -2263,15 +2279,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let shared = shared.clone();
         let weak = weak.clone();
         ui.on_export_clicked(move || {
-            // 优先用设置里的「导出目录」，没设过才回退到上次保存的位置
-            let dir = {
-                let cfg = shared.cfg.lock().unwrap();
-                if cfg.export_dir.trim().is_empty() {
-                    cfg.last_dir.clone()
-                } else {
-                    export_dir_of(&cfg)
-                }
-            };
+            let dir=export_dir_of(&shared.cfg.lock().unwrap());
             let mut dialog = rfd::FileDialog::new()
                 .set_title("导出评论数据（JSON）")
                 .set_file_name(default_export_name());
@@ -2283,39 +2291,30 @@ fn main() -> Result<(), slint::PlatformError> {
                 if path.extension().is_none() {
                     path.set_extension("json");
                 }
-                {
-                    let mut cfg = shared.cfg.lock().unwrap();
-                    if let Some(d) = path.parent() {
-                        cfg.last_dir = d.to_string_lossy().to_string();
-                    }
-                    cfg.save_reported();
-                }
                 let _ = tx.send(Cmd::Export { path });
             }
             let _ = &weak;
         });
     }
 
-    // ---- 网页预览（入口：右上角状态胶囊 / 设置里的「打开网页」） ----
+    // ---- 网页预览（入口：设置里的「打开网页」） ----
     // 已经起过的服务地址，重复点击只是再打开一次浏览器，不重复占用端口
     let web_url: Arc<Mutex<Option<WebHandle>>> = Arc::new(Mutex::new(None));
     {
         let shared = shared.clone();
         let weak = weak.clone();
         let web_url = web_url.clone();
-        ui.on_open_web(move || {
+        ui.on_settings_open_web(move || {
             let port = shared.cfg.lock().unwrap().web_port;
-            ensure_web(&shared, &weak, &web_url, port, true, true);
+            ensure_web(&shared, &weak, &web_url, port, true);
         });
     }
 
     {
-        let shared = shared.clone();
-        let weak = weak.clone();
-        let web_url = web_url.clone();
-        ui.on_settings_open_web(move || {
-            let port = shared.cfg.lock().unwrap().web_port;
-            ensure_web(&shared, &weak, &web_url, port, true, true);
+        let shared=shared.clone(); let weak=weak.clone(); let web_url=web_url.clone();
+        ui.on_preview_status_clicked(move||{
+            let port=shared.cfg.lock().unwrap().web_port;
+            ensure_web(&shared,&weak,&web_url,port,true);
         });
     }
 
@@ -2339,53 +2338,14 @@ fn main() -> Result<(), slint::PlatformError> {
                     return;
                 }
             };
-            ensure_web(&shared, &weak, &web_url, port, false, false);
+            ensure_web(&shared, &weak, &web_url, port, false);
         });
     }
 
-    {
-        let tx = tx.clone();
-        let shared = shared.clone();
-        ui.on_split_import_clicked(move || {
-            if shared.busy.load(Ordering::SeqCst) {
-                return;
-            }
-            let dir = {
-                let cfg = shared.cfg.lock().unwrap();
-                export_dir_of(&cfg)
-            };
-            if let Some(files) = rfd::FileDialog::new()
-                .set_title("选择要按稿件拆解的 JSON")
-                .set_directory(dir)
-                .add_filter("JSON", &["json"])
-                .pick_files()
-            {
-                let _ = tx.send(Cmd::SplitImport(files));
-            }
-        });
-    }
+
 
     // ---- 导入 ----
-    {
-        let tx = tx.clone();
-        let shared = shared.clone();
-        let weak = weak.clone();
-        ui.on_import_clicked(move || {
-            let dir = shared.cfg.lock().unwrap().last_dir.clone();
-            let mut dialog = rfd::FileDialog::new()
-                .set_title("导入 JSON（可多选，自动合并去重）")
-                .add_filter("JSON 文件", &["json"]);
-            if !dir.is_empty() {
-                dialog = dialog.set_directory(&dir);
-            }
-            if let Some(files) = dialog.pick_files() {
-                if !files.is_empty() {
-                    let _ = tx.send(Cmd::Import(files));
-                }
-            }
-            let _ = &weak;
-        });
-    }
+
 
     // ---- 打开目录 ----
     {
@@ -2402,25 +2362,28 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
 
+
+    {let tx=tx.clone();let shared=shared.clone();ui.on_process_resources(move ||{if !shared.busy.load(Ordering::SeqCst){let _=tx.send(Cmd::ProcessResources);}});}
+
     // ---- 设置 ----
     {
         let shared = shared.clone();
         let weak = weak.clone();
         ui.on_settings_open(move || {
-            let (port, dir, auto, delay, delay_max) = {
+            let (port, dir, delay, delay_max) = {
                 let cfg = shared.cfg.lock().unwrap();
                 (
                     cfg.web_port.to_string(),
                     export_dir_of(&cfg),
-                    cfg.auto_export,
                     cfg.interval_ms.to_string(),
                     cfg.interval_max_ms.to_string(),
                 )
             };
+            let policy=shared.cfg.lock().unwrap().resource_policy.clone();
             emit(&weak, move |w| {
                 w.set_web_port_text(port.into());
                 w.set_export_dir_text(dir.into());
-                w.set_auto_export(auto);
+                w.set_resource_avatars(policy.avatars);w.set_resource_covers(policy.covers);w.set_resource_content_images(policy.content_images);
                 w.set_page_delay_text(delay.into());
                 w.set_page_delay_max_text(delay_max.into());
                 w.set_settings_visible(true);
@@ -2432,11 +2395,10 @@ fn main() -> Result<(), slint::PlatformError> {
         let shared = shared.clone();
         let weak = weak.clone();
         ui.on_settings_apply(move || {
-            let (port_txt, dir, auto, delay_txt, delay_max_txt) = match weak.upgrade() {
+            let (port_txt, dir, delay_txt, delay_max_txt) = match weak.upgrade() {
                 Some(w) => (
                     w.get_web_port_text().to_string(),
                     w.get_export_dir_text().to_string(),
-                    w.get_auto_export(),
                     w.get_page_delay_text().to_string(),
                     w.get_page_delay_max_text().to_string(),
                 ),
@@ -2470,11 +2432,13 @@ fn main() -> Result<(), slint::PlatformError> {
             next.web_port = port;
             next.interval_ms = low;
             next.interval_max_ms = high;
-            next.export_dir = dir;
-            next.auto_export = auto;
+            if !shared.offline.load(Ordering::SeqCst){next.export_dir = dir.clone();}
+            if let Some(w)=weak.upgrade(){next.resource_policy=archive::ResourcePolicy{avatars:w.get_resource_avatars(),covers:w.get_resource_covers(),content_images:w.get_resource_content_images()};}
             match next.save() {
                 Ok(()) => {
+                    let changed_root=!shared.offline.load(Ordering::SeqCst)&&dir!=export_dir_of(&cfg);
                     *cfg = next;
+                    if changed_root {if let Err(e)=offline::forget_active(){push_log(&shared,&weak,e.to_string());}}
                     set_foot(&weak, "设置已保存".into());
                 }
                 Err(e) => port_alert(&weak, format!("保存设置失败：{}", e)),
@@ -2492,14 +2456,14 @@ fn main() -> Result<(), slint::PlatformError> {
                 let cfg = shared.cfg.lock().unwrap();
                 let port = cfg.web_port.to_string();
                 let dir = export_dir_of(&cfg);
-                let auto = cfg.auto_export;
+                let policy = cfg.resource_policy.clone();
                 let delay = cfg.interval_ms.to_string();
                 let delay_max = cfg.interval_max_ms.to_string();
                 drop(cfg);
+                w.set_resource_avatars(policy.avatars);w.set_resource_covers(policy.covers);w.set_resource_content_images(policy.content_images);
                 w.set_settings_visible(false);
                 w.set_web_port_text(port.into());
                 w.set_export_dir_text(dir.into());
-                w.set_auto_export(auto);
                 w.set_page_delay_text(delay.into());
                 w.set_page_delay_max_text(delay_max.into());
             }
@@ -2546,54 +2510,49 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     {
-        let weak=weak.clone();
-        ui.on_range_edited(move |ty| {if let Some(w)=weak.upgrade() {clamp_range_input(&w,ty as u32);}});
-    }
-    {
-        let weak=weak.clone();let tx=tx.clone();let shared=shared.clone();
-        ui.on_range_all(move |ty| {
-            if shared.busy.load(Ordering::SeqCst) {return;}
-            let Some(w)=weak.upgrade() else {return;};
-            if select_all_range(&w,ty as u32) {
-                if shared.account_uid.load(Ordering::SeqCst)>0 {
-                    set_foot(&weak,format!("正在获取{}总页数…",checkpoint::label(ty as u32)));
-                    let _=tx.send(Cmd::QueryTotals(vec![ty as u32]));
-                } else {
-                    set_foot(&weak,"已选择全部，请先登录以获取总页数".into());
-                }
+        let shared=shared.clone();let weak=weak.clone();
+        ui.on_range_edited(move |ty| {if let Some(w)=weak.upgrade(){
+            if let Some((from,to,_))=range_input(&w,ty as u32) {
+                let mut session=shared.range_session.lock().unwrap();
+                if let Some(state)=session.ranges.get_mut(&(ty as u32)){state.edit(&from,&to);}
+                range_ui::render(&w,&session);
             }
-        });
+        }});
     }
     {
-        let tx = tx.clone();
-        let shared = shared.clone();
-        ui.on_range_enabled(move |ty, enabled| {
-            if enabled
-                && shared.account_uid.load(Ordering::SeqCst) > 0
-                && collection::TYPES.contains(&(ty as u32))
+        let shared=shared.clone();let weak=weak.clone();
+        ui.on_range_all(move |ty| {if shared.busy.load(Ordering::SeqCst){return;}if let Some(w)=weak.upgrade(){
+            let mut session=shared.range_session.lock().unwrap();
+            if let Some(state)=session.ranges.get_mut(&(ty as u32)){state.all();}
+            range_ui::render(&w,&session);
+        }});
+    }
+    {
+        let shared=shared.clone();let weak=weak.clone();
+        ui.on_range_enabled(move |ty,enabled| {if let Some(w)=weak.upgrade(){
+            let mut session=shared.range_session.lock().unwrap();
+            if let Some(state)=session.ranges.get_mut(&(ty as u32)){state.choose(enabled);}
+            range_ui::render(&w,&session);
+        }});
+    }
+    {
+        let shared=shared.clone();let weak=weak.clone();let tx=tx.clone();
+        ui.on_range_retry(move |ty| {
+            if shared.busy.load(Ordering::SeqCst)||shared.loading_local.load(Ordering::SeqCst){return;}
+            if shared.account_uid.load(Ordering::SeqCst)==0 {set_foot(&weak,"请先登录以读取类型总数".into());return;}
+            let Some(w)=weak.upgrade() else{return;};
             {
-                let _ = tx.send(Cmd::QueryTotals(vec![ty as u32]));
+                let session=shared.range_session.lock().unwrap();
+                let Some(state)=session.ranges.get(&(ty as u32)) else{return;};
+                if state.pending{return;}
             }
-        });
-    }
-
-    // ---- 清空 ----
-    {
-        let shared = shared.clone();
-        let weak = weak.clone();
-        ui.on_clear_all(move || {
-            if shared.busy.load(Ordering::SeqCst) {
-                return;
+            let uid=shared.account_uid.load(Ordering::SeqCst);
+            let cookie=shared.cfg.lock().unwrap().sessdata.clone();
+            let batch=begin_range_read(&shared,&weak,&[ty as u32]);
+            range_ui::render(&w,&shared.range_session.lock().unwrap());
+            if tx.send(Cmd::QueryTotals {types:vec![ty as u32],uid,cookie,batch}).is_err(){
+                shared.range_session.lock().unwrap().finish(batch);render_range_session(&shared,&weak);
             }
-            shared.rows.lock().unwrap().clear();
-            *shared.doc.lock().unwrap() = ArchiveDoc::default();
-            refresh_rows(&shared, &weak);
-            refresh_stats(&shared, &weak);
-            clear_checkpoint(&shared, &weak);
-            push_log(&shared, &weak, "已清空当前列表与数据");
-            set_foot(&weak, "已清空".into());
-            set_status(&weak, "未连接".into(), false);
-            emit(&weak, |w| w.set_account_text("".into()));
         });
     }
 
@@ -2605,10 +2564,12 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
 
+    messages_ui::install(&ui, &shared, &tx, &weak, &web_url);
+
     // ---- 默认启动网页服务：没数据也先起，之后采集到的数据会直接出现在页面上 ----
     {
         let port = shared.cfg.lock().unwrap().web_port;
-        ensure_web(&shared, &weak, &web_url, port, false, false);
+        ensure_web(&shared, &weak, &web_url, port, false);
     }
 
     ui.run()
@@ -2711,9 +2672,7 @@ fn restore_checkpoint(shared: &Arc<Shared>, ui: &Weak<AppWindow>, uid: u64) {
             let restored = task.doc();
             {
                 let mut doc = shared.doc.lock().unwrap();
-                for video in restored.videos {
-                    doc.merge_video(video);
-                }
+                doc.merge_videos(restored.videos);
             }
             if task.mode == "selected" {
                 let mut rows = shared.rows.lock().unwrap();
@@ -2741,11 +2700,30 @@ fn restore_checkpoint(shared: &Arc<Shared>, ui: &Weak<AppWindow>, uid: u64) {
 }
 
 fn set_account(shared: &Arc<Shared>, ui: &Weak<AppWindow>, uid: u64) {
+    set_account_with_loading(shared,ui,uid,false);
+}
+fn set_account_with_loading(shared: &Arc<Shared>, ui: &Weak<AppWindow>, uid: u64, preserve_loading:bool) {
     let old = shared.account_uid.swap(uid, Ordering::SeqCst);
+    archive::set_account(uid);
     if old != uid {
-        for ty in collection::TYPES {
-            set_type_total(ui, ty, None);
+        account_ui::reset(shared, ui, uid);
+        emit(ui,|w|{w.set_message_groups(false);w.set_message_groups_confirm(false);message_dates::reset(w);});
+        if preserve_loading {
+            *shared.messages.lock().unwrap() = messages::Store::default();
+        } else {
+            let _local = LocalReadGuard::messages(shared, ui);
+            let root = PathBuf::from(export_dir_of(&shared.cfg.lock().unwrap()));
+            let state = if uid == 0 { messages::Store::default() } else {
+                messages::load(&root, uid).unwrap_or_else(|error| messages::Store {
+                    doc: messages::Doc::new(uid), root: messages::base(&root, uid), notice: error.to_string(),
+                })
+            };
+            *shared.messages.lock().unwrap() = state;
         }
+        messages_ui::refresh(shared, ui);
+        let saved_ranges=shared.cfg.lock().unwrap().ranges.clone();
+        shared.range_session.lock().unwrap().reset(&saved_ranges,preserve_loading);
+        render_range_session(shared,ui);
         shared.rows.lock().unwrap().clear();
         *shared.doc.lock().unwrap() = ArchiveDoc::default();
         *shared.checkpoint.lock().unwrap() = None;
@@ -2791,6 +2769,119 @@ mod settings_component_tests {
         });
     }
     #[test]
+    fn calendar_selection_is_only_written_on_confirm() {
+        let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+        slint::platform::set_platform(Box::new(Headless(window))).unwrap();
+        let ui = AppWindow::new().unwrap();
+        message_dates::install(&ui, &ui.as_weak());
+        ui.set_message_from("2023-12-31".into());
+        ui.invoke_message_calendar_open(0);
+        ui.invoke_message_calendar_shift(1);
+        assert_eq!(ui.get_message_calendar_year(), 2024);
+        assert_eq!(ui.get_message_calendar_month(), 1);
+        ui.invoke_message_calendar_month_changed(2024, 2);
+        ui.invoke_message_calendar_day_selected(29);
+        assert_eq!(ui.get_message_from().as_str(), "2023-12-31");
+        assert!(ui.invoke_message_calendar_accept(0, ui.get_message_calendar_date()));
+        assert_eq!(ui.get_message_from().as_str(), "2024-02-29");
+        assert_eq!(ui.invoke_message_date_display(ui.get_message_from()).as_str(), "2024/02/29");
+    }
+    #[test]
+    fn queued_archive_read_is_loading_before_worker_and_cleans_up_on_exit() {
+        let window=MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+        slint::platform::set_platform(Box::new(Headless(window))).unwrap();
+        let ui=AppWindow::new().unwrap();let weak=ui.as_weak();
+        let mut cfg=Cfg::default();cfg.sessdata="test-session".into();
+        let shared=Arc::new(Shared::new(cfg));let(tx,rx)=channel();
+        assert!(enqueue_archive_read(&shared,&weak,&tx));
+        range_ui::render(&ui,&shared.range_session.lock().unwrap());
+        assert_eq!(ui.get_range_video_total().as_str(),"读取中…");
+        assert!(ui.get_range_video_loading()&&ui.get_range_audio_loading());
+        let batch=match rx.try_recv().unwrap(){Cmd::ReadArchives{batch,..}=>batch,_=>panic!("unexpected command")};
+        {
+            let _guard=RangeReadGuard::new(&shared,&weak,batch);
+            complete_range_read(&shared,&weak,batch,1,Some(65));
+            assert!(shared.range_session.lock().unwrap().ranges[&11].pending);
+        }
+        assert!(shared.range_session.lock().unwrap().ranges.values().all(|r|!r.pending));
+        assert_eq!(shared.range_session.lock().unwrap().ranges[&1].total,Some(65));
+        drop(rx);assert!(!enqueue_archive_read(&shared,&weak,&tx));
+        assert!(shared.range_session.lock().unwrap().ranges.values().all(|r|!r.pending));
+        shared.cfg.lock().unwrap().sessdata.clear();
+        assert!(!enqueue_archive_read(&shared,&weak,&tx));
+        assert!(shared.range_session.lock().unwrap().ranges.values().all(|r|!r.pending));
+    }
+    #[test]
+    fn collection_links_only_appear_in_selected_mode_and_footer_is_clickable() {
+        let window=MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+        slint::platform::set_platform(Box::new(Headless(window.clone()))).unwrap();
+        let ui=AppWindow::new().unwrap();window.set_size(slint::PhysicalSize::new(1040,700));
+        let reads=Rc::new(Cell::new(0));let counter=reads.clone();ui.on_read_archives(move |_|counter.set(counter.get()+1));
+        let selections=Rc::new(Cell::new(0));let counter=selections.clone();ui.on_toggle_all(move ||counter.set(counter.get()+1));
+        click(&ui,240.,108.);assert_eq!(reads.get(),0);
+        ui.set_scope(1);click(&ui,240.,108.);assert_eq!(reads.get(),1);
+        click(&ui,290.,108.);assert_eq!(selections.get(),1);
+        let previews=Rc::new(Cell::new(0));let counter=previews.clone();ui.on_preview_status_clicked(move ||counter.set(counter.get()+1));
+        click(&ui,100.,685.);assert_eq!(previews.get(),1);
+        ui.set_web_running(true);ui.set_web_address("http://127.0.0.1:8686/".into());
+        click(&ui,100.,685.);assert_eq!(previews.get(),2);
+    }
+    #[test]
+    fn header_account_login_menu_busy_guard_and_status_independence() {
+        let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+        slint::platform::set_platform(Box::new(Headless(window.clone()))).unwrap();
+        let ui = AppWindow::new().unwrap();
+        window.set_size(slint::PhysicalSize::new(1040,700));
+        let logins = Rc::new(Cell::new(0)); let count = logins.clone();
+        ui.on_qr_login(move || count.set(count.get()+1));
+        assert!(!ui.get_account_logged_in());
+        click(&ui,875.,35.); assert_eq!(logins.get(),0);
+        click(&ui,875.,132.); assert_eq!(logins.get(),1);
+        ui.set_busy(true); click(&ui,875.,35.); assert_eq!(logins.get(),1);
+        ui.set_busy(false); ui.set_account_logged_in(true);
+        ui.set_account_name("一个很长的用户名用于验证账号入口的省略显示".into());
+        ui.set_account_uid("123".into());
+        ui.set_status_text("网页预览已启动".into()); ui.set_status_ok(true);
+        assert!(ui.get_account_logged_in()); assert_eq!(ui.get_account_uid().as_str(),"123");
+        click(&ui,875.,35.); assert_eq!(logins.get(),1,"a logged-in click opens its menu");
+        click(&ui,800.,140.); assert_eq!(logins.get(),2,"menu offers account switching");
+        ui.set_busy(true); click(&ui,875.,35.); click(&ui,800.,140.);
+        assert_eq!(logins.get(),2,"tasks disable switching accounts");
+    }
+    #[test]
+    fn message_dates_defaults_calendar_and_reset(){
+        let window=MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+        slint::platform::set_platform(Box::new(Headless(window.clone()))).unwrap();
+        let ui=AppWindow::new().unwrap();window.set_size(slint::PhysicalSize::new(1040,700));
+        message_dates::install(&ui,&ui.as_weak());
+        assert!(ui.get_message_from().is_empty());assert_eq!(ui.get_message_to().as_str(),chrono::Local::now().format("%Y-%m-%d").to_string());assert!(ui.get_message_date_auto_end());
+        assert!(ui.invoke_message_calendar_accept(1,MessageCalendarDate{year:2026,month:2,day:28}));
+        assert!(!ui.get_message_date_auto_end());
+        message_dates::refresh_automatic_end(&ui);
+        assert_eq!(ui.get_message_to().as_str(),"2026-02-28");
+        ui.set_message_from("2024-02-29".into());let seed=ui.invoke_message_calendar_open(0);assert_eq!((seed.year,seed.month,seed.day),(2024,2,29));
+        ui.invoke_message_calendar_accept(0,MessageCalendarDate{year:2026,month:3,day:1});assert_eq!(ui.get_message_from().as_str(),"2024-02-29");assert!(!ui.get_message_date_error().is_empty());
+        ui.invoke_message_calendar_accept(0,MessageCalendarDate{year:2026,month:2,day:1});assert_eq!(ui.get_message_from().as_str(),"2026-02-01");assert!(ui.get_message_date_error().is_empty());
+        ui.invoke_message_date_clear(1);message_dates::refresh_automatic_end(&ui);assert!(ui.get_message_to().is_empty());assert!(!ui.get_message_date_auto_end());
+        let generation=ui.get_message_calendar_generation();message_dates::reset(&ui);assert!(ui.get_message_from().is_empty());assert!(ui.get_message_date_auto_end());assert_ne!(ui.get_message_calendar_generation(),generation);
+    }
+    #[test]
+    fn group_confirmation_defaults_cancel_close_and_accept() {
+        let window=MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+        slint::platform::set_platform(Box::new(Headless(window.clone()))).unwrap();
+        let ui=AppWindow::new().unwrap();window.set_size(slint::PhysicalSize::new(1280,900));
+        assert!(!ui.get_message_groups());assert!(!ui.get_message_groups_confirm());
+        ui.set_message_groups_confirm(true);click(&ui,640.,440.);
+        assert!(ui.get_message_groups_confirm(),"blank card area must not cancel");
+        click(&ui,20.,500.);assert!(!ui.get_message_groups_confirm());assert!(!ui.get_message_groups());
+        ui.set_message_groups_confirm(true);click(&ui,670.,510.);
+        assert!(!ui.get_message_groups_confirm());assert!(!ui.get_message_groups());
+        ui.set_message_groups_confirm(true);click(&ui,804.,390.);
+        assert!(!ui.get_message_groups_confirm());assert!(!ui.get_message_groups());
+        ui.set_message_groups_confirm(true);click(&ui,770.,510.);
+        assert!(!ui.get_message_groups_confirm());assert!(ui.get_message_groups());
+    }
+    #[test]
     fn card_clicks_save_and_outside_close() {
         // Component events only: no native window, actual profile or network access.
         let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
@@ -2810,9 +2901,9 @@ mod settings_component_tests {
         ui.on_settings_apply(move || c.set(c.get() + 1));
         click(&ui, 870., 450.); // blank inside the card
         assert_eq!(closed.get(), 0, "card blank area must consume clicks");
-        click(&ui, 455., 320.); // port input
+        click(&ui, 455., ui.get_settings_dialog_top()+109.); // port input
         assert_eq!(closed.get(), 0, "editing a setting must not close the card");
-        click(&ui, 817., 610.); // bottom-right Save button
+        click(&ui, 817., ui.get_settings_dialog_top()+ui.get_settings_dialog_height()-33.); // bottom-right Save button in the scrollable settings card
         assert_eq!(
             saved.get(),
             1,
@@ -2820,7 +2911,7 @@ mod settings_component_tests {
         );
         assert_eq!(closed.get(), 0, "Save must not close the card");
         assert!(ui.get_settings_visible());
-        click(&ui, 847., 289.);
+        click(&ui, 847., ui.get_settings_dialog_top()+34.);
         assert_eq!(closed.get(), 1, "header close button must close settings");
         click(&ui, 20., 450.);
         assert_eq!(closed.get(), 2, "outside overlay must also close settings");
@@ -2854,7 +2945,7 @@ mod settings_component_tests {
         let ui = AppWindow::new().unwrap();
         let weak = ui.as_weak();
         let root = tempfile::tempdir().unwrap();
-        export::export_item(
+        export::export_item_for(
             root.path(),
             &Video {
                 aid: 42,
@@ -2864,7 +2955,7 @@ mod settings_component_tests {
                     ..Default::default()
                 }],
                 ..Default::default()
-            },
+            },123,
         )
         .unwrap();
         let mut cfg = Cfg::default();
@@ -2881,6 +2972,27 @@ mod settings_component_tests {
         set_account(&shared, &weak, 456);
         assert!(shared.doc.lock().unwrap().videos.is_empty());
         assert!(shared.rows.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn wait_modal_blocks_background_and_settings_until_background_wait_is_chosen() {
+        let window=MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+        slint::platform::set_platform(Box::new(Headless(window.clone()))).unwrap();
+        let ui=AppWindow::new().unwrap();window.set_size(slint::PhysicalSize::new(1280,900));
+        let opened=Rc::new(Cell::new(0));let c=opened.clone();ui.on_settings_open(move||c.set(c.get()+1));
+        let preview=Rc::new(Cell::new(0));let c=preview.clone();ui.on_preview_status_clicked(move||c.set(c.get()+1));
+        let saved=Rc::new(Cell::new(0));let c=saved.clone();ui.on_settings_apply(move||c.set(c.get()+1));
+        let weak=ui.as_weak();ui.on_verify_dismiss(move||{let w=weak.upgrade().unwrap();w.set_verify_background(true);w.set_verify_visible(false);});
+        click(&ui,1218.,35.);assert_eq!(opened.get(),1);
+        ui.set_verify_visible(true);ui.set_verify_waiting(true);ui.set_verify_secs(60);
+        click(&ui,1218.,35.);click(&ui,100.,885.);click(&ui,640.,450.);
+        assert_eq!(opened.get(),1);assert_eq!(preview.get(),0);assert!(ui.get_verify_visible());
+        ui.set_settings_visible(true);
+        let save_y=ui.get_settings_dialog_top()+ui.get_settings_dialog_height()-33.;
+        click(&ui,817.,save_y);assert_eq!(saved.get(),0,"settings behind the modal must not receive clicks");
+        click(&ui,792.,524.);assert!(!ui.get_verify_visible());assert!(ui.get_verify_background());assert!(ui.get_verify_waiting());
+        click(&ui,817.,save_y);assert_eq!(saved.get(),1,"background wait restores page interaction");
+        ui.set_settings_visible(false);click(&ui,1218.,35.);assert_eq!(opened.get(),2);
     }
 
     #[test]
@@ -2902,58 +3014,22 @@ mod settings_component_tests {
 
 
     #[test]
-    fn all_button_and_upper_bound_correction_work_for_every_type() {
+    fn availability_and_bounds_render_consistently_for_all_five_types() {
         let window=MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
         slint::platform::set_platform(Box::new(Headless(window))).unwrap();
         let ui=AppWindow::new().unwrap();
-        ui.set_range_video_limit("7".into());
-        ui.set_range_video_from("3".into());ui.set_range_video_to("999".into());
-        clamp_range_input(&ui,1);assert_eq!(ui.get_range_video_to().as_str(),"7");
-        assert!(!select_all_range(&ui,1));
-        assert_eq!(ui.get_range_video_from().as_str(),"1");assert_eq!(ui.get_range_video_to().as_str(),"7");
-        ui.set_range_dynamic_limit("7".into());
-        ui.set_range_dynamic_from("3".into());ui.set_range_dynamic_to("999".into());
-        clamp_range_input(&ui,11);assert_eq!(ui.get_range_dynamic_to().as_str(),"7");
-        assert!(!select_all_range(&ui,11));
-        assert_eq!(ui.get_range_dynamic_from().as_str(),"1");assert_eq!(ui.get_range_dynamic_to().as_str(),"7");
-        ui.set_range_repost_limit("7".into());
-        ui.set_range_repost_from("3".into());ui.set_range_repost_to("999".into());
-        clamp_range_input(&ui,17);assert_eq!(ui.get_range_repost_to().as_str(),"7");
-        assert!(!select_all_range(&ui,17));
-        assert_eq!(ui.get_range_repost_from().as_str(),"1");assert_eq!(ui.get_range_repost_to().as_str(),"7");
-        ui.set_range_article_limit("7".into());
-        ui.set_range_article_from("3".into());ui.set_range_article_to("999".into());
-        clamp_range_input(&ui,12);assert_eq!(ui.get_range_article_to().as_str(),"7");
-        assert!(!select_all_range(&ui,12));
-        assert_eq!(ui.get_range_article_from().as_str(),"1");assert_eq!(ui.get_range_article_to().as_str(),"7");
-        ui.set_range_audio_limit("7".into());
-        ui.set_range_audio_from("3".into());ui.set_range_audio_to("999".into());
-        clamp_range_input(&ui,14);assert_eq!(ui.get_range_audio_to().as_str(),"7");
-        assert!(!select_all_range(&ui,14));
-        assert_eq!(ui.get_range_audio_from().as_str(),"1");assert_eq!(ui.get_range_audio_to().as_str(),"7");
-        ui.set_range_audio_limit("".into());assert!(select_all_range(&ui,14));
-        assert!(ui.get_range_audio_all_pending());
-        ui.set_range_audio_limit("4".into());assert!(!select_all_range(&ui,14));
-        assert_eq!(ui.get_range_audio_to().as_str(),"4");
-    }
-
-    #[test]
-    fn known_last_page_autofills_all_five_types_and_preserves_manual_ranges() {
-        let window=MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
-        slint::platform::set_platform(Box::new(Headless(window))).unwrap();
-        let ui=AppWindow::new().unwrap();
+        let mut session=range_ui::Session::new(&collection::defaults());
+        range_ui::render(&ui,&session);
+        for ty in collection::TYPES {assert_eq!(range_input(&ui,ty).unwrap(),(String::new(),String::new(),None));}
         for ty in collection::TYPES {
-            set_range_bounds(&ui,ty,"3".into(),String::new());
-            fill_known_end(&ui,ty,Some(7));
-            let (from,to,_)=range_input(&ui,ty).unwrap();
-            assert_eq!((from,to),("3".into(),"7".into()));
-            set_range_bounds(&ui,ty,"2".into(),"4".into());
-            fill_known_end(&ui,ty,Some(7));
-            assert_eq!(range_input(&ui,ty).unwrap().1,"4");
-            set_range_bounds(&ui,ty,"1".into(),String::new());
-            fill_known_end(&ui,ty,None);assert!(range_input(&ui,ty).unwrap().1.is_empty());
-            fill_known_end(&ui,ty,Some(0));assert!(range_input(&ui,ty).unwrap().1.is_empty());
+            let state=session.ranges.get_mut(&ty).unwrap();state.update_total(Some(65));state.edit("3","999");state.all();
         }
+        range_ui::render(&ui,&session);
+        for ty in collection::TYPES {assert_eq!(range_input(&ui,ty).unwrap(),("1".into(),"7".into(),Some(7)));}
+        for state in session.ranges.values_mut(){state.update_total(Some(0));}
+        range_ui::render(&ui,&session);
+        assert!(!ui.get_range_video_enabled()&&!ui.get_range_audio_available());
+        for ty in collection::TYPES {assert_eq!(range_input(&ui,ty).unwrap(),(String::new(),String::new(),Some(0)));}
     }
 
     #[test]
@@ -2972,7 +3048,87 @@ mod settings_component_tests {
         }
         assert!(!shared.loading_local.load(Ordering::SeqCst));
         pause_collection(&shared,&weak);
+        assert!(!shared.cancel.load(Ordering::SeqCst),"idle operations cannot be paused");
+        let task=TaskGuard::begin(&shared,&weak,1).unwrap();
+        pause_collection(&shared,&weak);
         assert!(shared.pause_requested.load(Ordering::SeqCst));assert!(shared.cancel.load(Ordering::SeqCst));
+        drop(task);assert_eq!(shared.active_task.load(Ordering::SeqCst),0);assert!(!shared.busy.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn workspace_panels_share_bounds_across_sizes_dpi_and_task_states() {
+        use slint::Model as _;
+        let window=MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+        slint::platform::set_platform(Box::new(Headless(window.clone()))).unwrap();
+        let ui=AppWindow::new().unwrap();ui.show().unwrap();
+        ui.set_scope(1);
+        ui.set_message_from("2026/11/".into());
+        ui.set_message_date_error("日期尚未填写完成，请补齐年月日。".repeat(12).into());
+        ui.set_log_text("22:00:00  很长的运行日志内容，应该仅在日志面板内部滚动\n".repeat(500).into());
+        ui.set_message_ng_count(195);
+        for (width,height,scale) in [(1200u32,792u32,1.0f32),(1040,700,1.0),(1200,792,1.25),(1040,700,1.5),(1280,900,2.0)] {
+            ui.window().dispatch_event(WindowEvent::ScaleFactorChanged{scale_factor:scale});
+            let physical_width=(width as f32*scale).round() as u32;
+            let physical_height=(height as f32*scale).round() as u32;
+            window.set_size(slint::PhysicalSize::new(physical_width,physical_height));
+            let mut pixels=vec![slint::platform::software_renderer::Rgb8Pixel{r:0,g:0,b:0};physical_width as usize*physical_height as usize];
+            for (active,busy,loading) in [(0,false,false),(1,true,false),(2,true,false),(3,true,false),(0,true,true)] {
+                ui.set_active_task(active);ui.set_busy(busy);ui.set_loading_local(loading);
+                ui.set_workspace(0);ui.window().request_redraw();
+                window.draw_if_needed(|renderer|{renderer.render(&mut pixels,physical_width as usize);});
+                let comments=ui.get_comments_panel_bounds().iter().collect::<Vec<_>>();
+                let comment_text=ui.get_comments_text_bounds().iter().collect::<Vec<_>>();
+                ui.set_workspace(1);ui.window().request_redraw();
+                window.draw_if_needed(|renderer|{renderer.render(&mut pixels,physical_width as usize);});
+                let messages=ui.get_messages_panel_bounds().iter().collect::<Vec<_>>();
+                let message_text=ui.get_messages_text_bounds().iter().collect::<Vec<_>>();
+                assert_eq!(comment_text.len(),6);assert_eq!(message_text.len(),6);
+                for (a,b) in comment_text.iter().zip(&message_text){assert!((a-b).abs()<0.1,"workspace title baselines differ: {a} != {b}");}
+                assert_eq!(comments.len(),28);assert_eq!(messages.len(),28);
+                assert!((ui.get_comments_action_bottom_gap()-6.).abs()<0.1);
+                assert!((ui.get_messages_action_bottom_gap()-6.).abs()<0.1);
+                for (index,(a,b)) in comments.iter().zip(&messages).enumerate() {
+                    assert!((a-b).abs()<0.1,"geometry {index} at {width}x{height}, DPI {scale}, task {active}: {a} != {b}");
+                }
+                assert!((comments[0]-16.).abs()<0.1);assert!((comments[1]-14.).abs()<0.1);
+                assert!((comments[2]-372.).abs()<0.1);
+                assert!((comments[4]-comments[0]-comments[2]-14.).abs()<0.1);
+                assert!((comments[15]-123.).abs()<0.1);assert!((comments[19]-101.).abs()<0.1);
+                assert!((comments[17]-comments[13]-comments[15]-8.).abs()<0.1);
+                assert!((comments[21]-comments[17]-comments[19]-14.).abs()<0.1);
+                assert!(comments[23]>=180.);
+                assert!(comments[24..].iter().all(|r|(*r-14.).abs()<0.1));
+                assert_eq!(ui.get_message_from().as_str(),"2026/11/");assert_eq!(ui.get_scope(),1);
+                assert_eq!(ui.get_active_task(),active);
+            }
+        }
+    }
+
+    #[test]
+    fn cached_message_workspace_does_not_read_source_files_or_change_task_state() {
+        let window=MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+        slint::platform::set_platform(Box::new(Headless(window))).unwrap();
+        let ui=AppWindow::new().unwrap();
+        let temp=tempfile::tempdir().unwrap();let mut cfg=Cfg::default();cfg.export_dir=temp.path().to_string_lossy().into_owned();
+        let shared=Arc::new(Shared::new(cfg));shared.account_uid.store(12,Ordering::SeqCst);
+        {
+            let mut state=shared.messages.lock().unwrap();state.doc=messages::Doc::new(12);state.root=messages::base(temp.path(),12);
+            // If the cached path is accidentally reloaded or rescanned this invalid
+            // backing file would fail parsing; the mounted projection must remain untouched.
+            std::fs::create_dir_all(&state.root).unwrap();std::fs::write(state.root.join("likes.json"),b"broken archive").unwrap();
+        }
+        let(tx,rx)=std::sync::mpsc::channel();assert!(messages_ui::request_view(&shared,&tx));
+        let uid=match rx.try_recv().unwrap(){Cmd::EnsureMessageView{uid}=>uid,_=>panic!("unexpected command")};
+        shared.busy.store(true,Ordering::SeqCst);shared.active_task.store(2,Ordering::SeqCst);
+        ui.set_message_count_likes("37".into());ui.set_message_ng_count(195);ui.set_message_has_resume(true);
+        messages_ui::ensure_view(uid,&shared,&ui.as_weak());
+        assert_eq!(ui.get_message_count_likes().as_str(),"37");assert_eq!(ui.get_message_ng_count(),195);assert!(ui.get_message_has_resume());
+        assert_eq!(shared.message_view_pending.load(Ordering::SeqCst),0);
+        assert!(shared.busy.load(Ordering::SeqCst));assert_eq!(shared.active_task.load(Ordering::SeqCst),2);
+        // An old account request must neither load a file nor release a newer account's request.
+        shared.account_uid.store(13,Ordering::SeqCst);assert!(messages_ui::request_view(&shared,&tx));
+        messages_ui::ensure_view(12,&shared,&ui.as_weak());assert_eq!(shared.message_view_pending.load(Ordering::SeqCst),13);
+        assert_eq!(shared.messages.lock().unwrap().doc.account_uid,"12");
     }
 }
 
@@ -2991,24 +3147,78 @@ mod export_directory_tests {
     }
 }
 
-fn load_history(shared: &Arc<Shared>, ui: &Weak<AppWindow>, uid: u64, expected_cookie: &str) {
-    let root = {
+fn load_startup_archives(shared: &Arc<Shared>, ui: &Weak<AppWindow>, uid: u64, expected_cookie: &str) {
+    let _loading = LocalReadGuard::begin(shared, ui);
+    let root = PathBuf::from(export_dir_of(&shared.cfg.lock().unwrap()));
+    let workers = local_read::workers();
+    let read_messages = || {
+        let result = messages::load_with_workers(&root, uid, 1);
         let cfg = shared.cfg.lock().unwrap();
-        export_dir_of(&cfg)
+        if cfg.sessdata != expected_cookie
+            || shared.account_uid.load(Ordering::SeqCst) != uid
+            || std::path::Path::new(&export_dir_of(&cfg)) != root.as_path()
+        {
+            return;
+        }
+        match result {
+            Ok(store) => {
+                let notice = store.notice.clone();
+                *shared.messages.lock().unwrap() = store;
+                drop(cfg);
+                if !notice.is_empty() { push_log(shared, ui, notice); }
+                messages_ui::refresh(shared, ui);
+            }
+            Err(error) => {
+                drop(cfg);
+                push_log(shared, ui, format!("加载本地消息失败：{error:#}"));
+            }
+        }
     };
-    let imported = export::load_user_exports(std::path::Path::new(&root), uid);
+    let read_comments = || {
+        load_history_with_workers(shared, ui, uid, expected_cookie, &root, workers.saturating_sub(1).max(1));
+        if shared.account_uid.load(Ordering::SeqCst) == uid
+            && shared.cfg.lock().unwrap().sessdata == expected_cookie
+        {
+            restore_checkpoint(shared, ui, uid);
+        }
+    };
+    if workers > 1 {
+        std::thread::scope(|scope| {
+            let messages = scope.spawn(read_messages);
+            read_comments();
+            messages.join().expect("message reader panicked");
+        });
+    } else {
+        read_comments();
+        read_messages();
+    }
+}
+
+#[cfg(test)]
+fn load_history(shared: &Arc<Shared>, ui: &Weak<AppWindow>, uid: u64, expected_cookie: &str) {
+    let root = PathBuf::from(export_dir_of(&shared.cfg.lock().unwrap()));
+    load_history_with_workers(shared, ui, uid, expected_cookie, &root, local_read::workers());
+}
+
+fn load_history_with_workers(
+    shared: &Arc<Shared>,
+    ui: &Weak<AppWindow>,
+    uid: u64,
+    expected_cookie: &str,
+    root: &std::path::Path,
+    workers: usize,
+) {
+    let imported = export::load_user_exports_with_workers(root, uid, workers);
     // Hold the credential lock until the result is applied so a superseded login
     // cannot insert a different account's data during an account transition.
     let cfg = shared.cfg.lock().unwrap();
-    if cfg.sessdata != expected_cookie || shared.account_uid.load(Ordering::SeqCst) != uid {
+    if cfg.sessdata != expected_cookie
+        || shared.account_uid.load(Ordering::SeqCst) != uid
+        || std::path::Path::new(&export_dir_of(&cfg)) != root
+    {
         return;
     }
-    {
-        let mut doc = shared.doc.lock().unwrap();
-        for video in imported.doc.videos {
-            doc.merge_video(video);
-        }
-    }
+    shared.doc.lock().unwrap().merge_videos(imported.doc.videos);
     sync_history_rows(shared);
     drop(cfg);
     for error in imported.errors {
@@ -3027,15 +3237,18 @@ fn load_history(shared: &Arc<Shared>, ui: &Weak<AppWindow>, uid: u64, expected_c
 }
 
 fn sync_history_rows(shared: &Arc<Shared>) {
-    let videos = shared.doc.lock().unwrap().videos.clone();
+    let videos: Vec<_> = shared.doc.lock().unwrap().videos.iter()
+        .map(Video::without_comments).collect();
     let mut rows = shared.rows.lock().unwrap();
+    let mut positions: std::collections::HashMap<_, _> = rows.iter().enumerate()
+        .map(|(index, (video, _))| ((video.reply_type(), video.aid), index))
+        .collect();
     for video in videos {
-        if let Some((existing, _)) = rows
-            .iter_mut()
-            .find(|(v, _)| checkpoint::key(v) == checkpoint::key(&video))
-        {
-            *existing = video;
+        let key = (video.reply_type(), video.aid);
+        if let Some(&index) = positions.get(&key) {
+            rows[index].0 = video;
         } else {
+            positions.insert(key, rows.len());
             rows.push((video, false));
         }
     }
@@ -3048,6 +3261,7 @@ fn query_type_totals(
     types: &[u32],
     expected_cookie: &str,
     uid: u64,
+    batch: u64,
 ) {
     for (index, &ty) in types.iter().enumerate() {
         if shared.cfg.lock().unwrap().sessdata != expected_cookie
@@ -3062,9 +3276,9 @@ fn query_type_totals(
             return;
         }
         match result {
-            Ok((_, total)) => set_type_total(ui, ty, Some(total)),
+            Ok((_, total)) => {complete_range_read(shared,ui,batch,ty,Some(total));},
             Err(e) => {
-                set_type_total(ui, ty, None);
+                complete_range_read(shared,ui,batch,ty,None);
                 push_log(
                     shared,
                     ui,
@@ -3078,6 +3292,7 @@ fn query_type_totals(
     }
 }
 
+#[cfg(test)]
 fn set_ui_ranges(w: &AppWindow, ranges: &collection::Ranges) {
     if let Some(r) = ranges.get(&1) {
         w.set_range_video_enabled(r.enabled);
@@ -3189,54 +3404,17 @@ fn ranges_from_ui(w: &AppWindow) -> Result<collection::Ranges> {
     );
     Ok(ranges)
 }
-fn set_type_total(ui:&Weak<AppWindow>,ty:u32,total:Option<u64>) {
-    let pages=total.map(|n|n.div_ceil(collection::PAGE_SIZE));
-    let text=total.map(|n|format!("共 {} 页 / {} 条",n.div_ceil(collection::PAGE_SIZE),n)).unwrap_or_else(||"未获取".into());
-    let limit=pages.map(|n|n.to_string()).unwrap_or_default();
-    emit(ui,move |w| {
-        match ty {
-            1=>{
-                let pending=w.get_range_video_all_pending();
-                w.set_range_video_total(text.into());w.set_range_video_limit(limit.into());
-                if pending && pages.is_some() {select_all_range(w,1);}
-                w.set_range_video_all_pending(false);
-            }
-            11=>{
-                let pending=w.get_range_dynamic_all_pending();
-                w.set_range_dynamic_total(text.into());w.set_range_dynamic_limit(limit.into());
-                if pending && pages.is_some() {select_all_range(w,11);}
-                w.set_range_dynamic_all_pending(false);
-            }
-            17=>{
-                let pending=w.get_range_repost_all_pending();
-                w.set_range_repost_total(text.into());w.set_range_repost_limit(limit.into());
-                if pending && pages.is_some() {select_all_range(w,17);}
-                w.set_range_repost_all_pending(false);
-            }
-            12=>{
-                let pending=w.get_range_article_all_pending();
-                w.set_range_article_total(text.into());w.set_range_article_limit(limit.into());
-                if pending && pages.is_some() {select_all_range(w,12);}
-                w.set_range_article_all_pending(false);
-            }
-            14=>{
-                let pending=w.get_range_audio_all_pending();
-                w.set_range_audio_total(text.into());w.set_range_audio_limit(limit.into());
-                if pending && pages.is_some() {select_all_range(w,14);}
-                w.set_range_audio_all_pending(false);
-            }
-            _=>return,
-        }
-        fill_known_end(w,ty,pages);
-        clamp_range_input(w,ty);
-    });
+fn render_range_session(shared:&Arc<Shared>,ui:&Weak<AppWindow>) {
+    let shared=shared.clone();
+    emit(ui,move|w|range_ui::render(w,&shared.range_session.lock().unwrap()));
 }
-
-fn fill_known_end(w:&AppWindow,ty:u32,pages:Option<u64>) {
-    let Some(pages)=pages.filter(|n|*n>0) else {return;};
-    if let Some((from,to,_))=range_input(w,ty) {
-        if to.trim().is_empty() {set_range_bounds(w,ty,from,pages.to_string());}
-    }
+fn complete_range_read(shared:&Arc<Shared>,ui:&Weak<AppWindow>,batch:u64,ty:u32,total:Option<u64>) {
+    let changed=shared.range_session.lock().unwrap().complete(batch,ty,total);
+    if changed {render_range_session(shared,ui);}
+}
+fn set_type_total(shared:&Arc<Shared>,ui:&Weak<AppWindow>,ty:u32,total:Option<u64>) {
+    if let Some(state)=shared.range_session.lock().unwrap().ranges.get_mut(&ty){state.update_total(total);}
+    render_range_session(shared,ui);
 }
 
 fn range_input(w:&AppWindow,ty:u32)->Option<(String,String,Option<u64>)> {
@@ -3249,36 +3427,6 @@ fn range_input(w:&AppWindow,ty:u32)->Option<(String,String,Option<u64>)> {
         _=>None,
     }
 }
-fn set_range_bounds(w:&AppWindow,ty:u32,from:String,to:String) {
-    match ty {
-        1=>{w.set_range_video_from(from.into());w.set_range_video_to(to.into());},
-        11=>{w.set_range_dynamic_from(from.into());w.set_range_dynamic_to(to.into());},
-        17=>{w.set_range_repost_from(from.into());w.set_range_repost_to(to.into());},
-        12=>{w.set_range_article_from(from.into());w.set_range_article_to(to.into());},
-        14=>{w.set_range_audio_from(from.into());w.set_range_audio_to(to.into());},
-        _=>(),
-    }
-}
-fn clamp_range_input(w:&AppWindow,ty:u32) {
-    if let Some((from,to,limit))=range_input(w,ty) {
-        let (from,to)=collection::corrected_bounds(&from,&to,limit);set_range_bounds(w,ty,from,to);
-    }
-}
-fn select_all_range(w:&AppWindow,ty:u32)->bool {
-    let Some((_,_,limit))=range_input(w,ty) else {return false;};
-    set_range_bounds(w,ty,"1".into(),limit.filter(|n|*n>0).map(|n|n.to_string()).unwrap_or_default());
-    let pending=limit.is_none();
-    match ty {
-        1=>w.set_range_video_all_pending(pending),
-        11=>w.set_range_dynamic_all_pending(pending),
-        17=>w.set_range_repost_all_pending(pending),
-        12=>w.set_range_article_all_pending(pending),
-        14=>w.set_range_audio_all_pending(pending),
-        _=>(),
-    }
-    pending
-}
-
 fn merge_online_metadata(shared: &Arc<Shared>, video: &Video) {
     let mut doc = shared.doc.lock().unwrap();
     if let Some(old) = doc
@@ -3355,6 +3503,10 @@ struct LocalReadGuard {
     ui: Weak<AppWindow>,
 }
 impl LocalReadGuard {
+    fn messages(shared:&Arc<Shared>,ui:&Weak<AppWindow>)->Self {
+        let guard=Self::begin(shared,ui);
+        emit(ui,|w|w.set_progress_text("正在处理本地消息归档…".into()));guard
+    }
     fn begin(shared:&Arc<Shared>,ui:&Weak<AppWindow>)->Self {
         shared.loading_local.store(true,Ordering::SeqCst);
         emit(ui,|w|{w.set_loading_local(true);w.set_progress_text("正在读取本地稿件…".into());});
@@ -3369,15 +3521,15 @@ impl Drop for LocalReadGuard {
 }
 
 fn pause_collection(shared:&Arc<Shared>,ui:&Weak<AppWindow>) {
-    if shared.loading_local.load(Ordering::SeqCst) {return;}
+    if shared.loading_local.load(Ordering::SeqCst) || shared.active_task.load(Ordering::SeqCst)==0 {return;}
     shared.pause_requested.store(true,Ordering::SeqCst);
     shared.cancel.store(true,Ordering::SeqCst);
-    emit(ui,|w|w.set_progress_text("正在暂停，保留进度…".into()));
+    emit(ui,|w|{w.set_progress_text("正在暂停，保留进度…".into());});
 }
 fn stop_collection(shared:&Arc<Shared>,ui:&Weak<AppWindow>) {
-    if shared.loading_local.load(Ordering::SeqCst) {return;}
+    if shared.loading_local.load(Ordering::SeqCst) || shared.active_task.load(Ordering::SeqCst)==0 {return;}
     shared.pause_requested.store(false,Ordering::SeqCst);
     shared.cancel.store(true,Ordering::SeqCst);
-    clear_checkpoint(shared,ui);
-    emit(ui,|w|w.set_progress_text("正在结束…".into()));
+    if !shared.message_active.load(Ordering::SeqCst) {clear_checkpoint(shared,ui);}
+    emit(ui,|w|{w.set_progress_text("正在结束…".into());});
 }

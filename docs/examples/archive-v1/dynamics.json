@@ -1,0 +1,71 @@
+{
+  "format": "bili-archive",
+  "version": 1,
+  "meta": {
+    "account_uid": "12",
+    "app_version": "1.0.0",
+    "exported_at": "2026-11-24T12:00:00+08:00"
+  },
+  "source": {
+    "type": "comments",
+    "category": "dynamics",
+    "owner_uid": "12",
+    "subject_keys": [
+      "dynamics:42"
+    ]
+  },
+  "users": {
+    "2": {
+      "uid": "2",
+      "name": "示例用户",
+      "avatar_resource_id": ""
+    }
+  },
+  "subjects": {
+    "dynamics:42": {
+      "key": "dynamics:42",
+      "type": "dynamic",
+      "id": "42",
+      "aid": "42",
+      "bvid": "",
+      "title": "示例主题",
+      "owner_mid": "12",
+      "owner_name": "作者",
+      "url": "https://www.bilibili.com/",
+      "cover": "",
+      "comment_type": 11,
+      "cover_resource_id": "",
+      "image_resource_ids": []
+    }
+  },
+  "sessions": [],
+  "items": [
+    {
+      "id": "18446744073709551614",
+      "type": "comment",
+      "subject_key": "dynamics:42",
+      "user_uid": "2",
+      "parent_id": null,
+      "root_id": "18446744073709551614",
+      "text": "示例评论",
+      "timestamp": 1700000000,
+      "resource_ids": [],
+      "fields": {
+        "rpid": "18446744073709551614",
+        "mid": "2",
+        "uname": "示例用户",
+        "avatar": "",
+        "content": "示例评论",
+        "ctime": 1700000000
+      },
+      "raw": null
+    }
+  ],
+  "resources": {},
+  "collection": {
+    "status": "partial",
+    "archived_total": 1,
+    "reported_total": null,
+    "exhausted": null
+  }
+}
