@@ -228,9 +228,12 @@ fn activate(account: &Account, shared: &Arc<Shared>, ui: &Weak<AppWindow>) -> Re
     );
     let _reading = LocalReadGuard::begin(shared, ui);
     set_foot(ui, "正在后台读取本地评论和消息…".into());
-    let precache = shared.cfg.lock().unwrap().archive_precache;
+    let (precache, workers) = {
+        let cfg = shared.cfg.lock().unwrap();
+        (cfg.archive_precache, cfg.archive_workers())
+    };
     let comments = if precache && crate::preview_disk::small_comment_archive(&root, account.uid) {
-        read_comments(&root, account.uid, crate::local_read::workers())?
+        read_comments(&root, account.uid, workers)?
     } else {
         crate::preview_disk::desktop_projection(&root, account.uid)
     };
@@ -238,6 +241,7 @@ fn activate(account: &Account, shared: &Arc<Shared>, ui: &Weak<AppWindow>) -> Re
     if precache && account.uid != 0 {
         messages_ui::load_overview(shared, ui, account.uid);
     }
+    log_foot(shared, ui, format!("离线账号 {} · 本地资料已读取", account.name));
     Ok(())
 }
 
@@ -314,7 +318,6 @@ fn activate_loaded(
         c.active = Some(key);
         save_catalog(&c)?;
     }
-    set_foot(ui, format!("离线账号 {} · 本地资料已读取", account.name));
     Ok(())
 }
 fn refresh_offline_avatar(
@@ -471,7 +474,7 @@ fn import(paths: Vec<PathBuf>, shared: &Arc<Shared>, ui: &Weak<AppWindow>) -> Re
     let mut state_source = None;
     let mut manifest = None;
     let mut strict = false;
-    let workers = crate::local_read::workers();
+    let workers = shared.cfg.lock().unwrap().archive_workers();
     let _reading = LocalReadGuard::begin(shared, ui);
     if paths.len() == 1
         && paths[0]
@@ -480,7 +483,7 @@ fn import(paths: Vec<PathBuf>, shared: &Arc<Shared>, ui: &Weak<AppWindow>) -> Re
     {
         let unpack = stage.path().join("unpack");
         set_foot(ui, "导入资料包：正在解包…".into());
-        portable_zip::extract(&paths[0], &unpack)?;
+        portable_zip::extract_with_workers(&paths[0], &unpack, workers)?;
         let marker = unpack.join("archive-v1/.library.json");
         let package_manifest: library::Manifest =
             serde_json::from_slice(&std::fs::read(&marker).context("离线资料包缺少资料库清单")?)?;
@@ -936,7 +939,7 @@ fn import(paths: Vec<PathBuf>, shared: &Arc<Shared>, ui: &Weak<AppWindow>) -> Re
         selected_comments,
         selected_messages,
     )?;
-    push_log(
+    log_foot(
         shared,
         ui,
         format!(
@@ -1116,7 +1119,7 @@ pub fn run(action: Action, shared: &Arc<Shared>, ui: &Weak<AppWindow>) {
             }
             Action::Export(path) => {
                 export_bundle(&path, shared)?;
-                set_foot(ui, format!("已导出离线资料包：{}", path.display()));
+                log_foot(shared, ui, format!("已导出离线资料包：{}", path.display()));
                 Ok(())
             }
         }

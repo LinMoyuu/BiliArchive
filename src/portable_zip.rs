@@ -148,11 +148,12 @@ pub fn create(dest: &Path, files: &[(String, PathBuf)]) -> Result<()> {
     temp.persist(dest).map_err(|e| e.error)?;
     Ok(())
 }
-pub fn extract(source: &Path, dest: &Path) -> Result<()> {
+#[cfg(test)]
+fn extract(source: &Path, dest: &Path) -> Result<()> {
     extract_with_workers(source, dest, crate::local_read::workers())
 }
 
-fn extract_with_workers(source: &Path, dest: &Path, workers: usize) -> Result<()> {
+pub fn extract_with_workers(source: &Path, dest: &Path, workers: usize) -> Result<()> {
     std::fs::create_dir_all(dest)?;
     let base = dest.canonicalize()?;
     let mut file = File::open(source)?;

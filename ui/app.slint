@@ -966,6 +966,8 @@ export component AppWindow inherits Window {
     callback range-all(int);
     callback range-edited(int);
     in-out property <bool> archive-precache: true;
+    in-out property <string> archive-workers-text;
+    in property <int> archive-workers-auto: 1;
     in-out property <bool> resource-avatars: false;
     in-out property <bool> resource-covers: false;
     in-out property <bool> resource-content-images: false;
@@ -1788,13 +1790,42 @@ export component AppWindow inherits Window {
                                     }
 
                                     Rectangle { height: 1px; background: #F1F3F8; }
-                                    HorizontalLayout {
-                                        height: 28px;
-                                        spacing: 12px;
-                                        Text { text: "归档预缓存"; color: Theme.text; font-size: Theme.font-section; font-weight: 600; vertical-alignment: center; horizontal-stretch: 1; }
-                                        Toggle { checked <=> root.archive-precache; enabled: !root.busy; }
+                                    VerticalLayout {
+                                        spacing: 4px;
+                                        HorizontalLayout {
+                                            height: 22px;
+                                            alignment: LayoutAlignment.start;
+                                            spacing: 8px;
+                                            Text { text: "归档预缓存"; color: Theme.text; font-size: Theme.font-section; font-weight: 600; vertical-alignment: center; }
+                                            Toggle { checked <=> root.archive-precache; enabled: !root.busy; }
+                                        }
+                                        Text { text: "开启后预读归档，关闭后按需从磁盘读取，可减少内存占用。"; color: Theme.faint; font-size: Theme.font-hint; wrap: word-wrap; }
+                                        HorizontalLayout {
+                                            alignment: LayoutAlignment.start;
+                                            spacing: 8px;
+                                            Text { text: "本地归档线程数"; color: Theme.text; font-size: Theme.font-body; vertical-alignment: center; }
+                                            Rectangle {
+                                                width: 68px;
+                                                height: 32px;
+                                                border-radius: 9px;
+                                                background: Theme.field;
+                                                border-width: 1px;
+                                                border-color: workers-in.has-focus ? #F7C3D3 : Theme.border;
+                                                Text {
+                                                    x: 9px; width: parent.width - 18px; height: parent.height;
+                                                    text: "自动"; visible: root.archive-workers-text == "" && !workers-in.has-focus;
+                                                    color: Theme.faint; font-size: Theme.font-body; vertical-alignment: center;
+                                                }
+                                                workers-in := TextInput {
+                                                    x: 9px; width: parent.width - 18px; height: parent.height;
+                                                    text <=> root.archive-workers-text;
+                                                    input-type: number; single-line: true;
+                                                    color: Theme.text; font-size: Theme.font-body; vertical-alignment: center;
+                                                }
+                                            }
+                                            Text { text: "1–16，留空自动（" + root.archive-workers-auto + " 线程）"; color: Theme.faint; font-size: Theme.font-hint; vertical-alignment: center; }
+                                        }
                                     }
-                                    Text { text: "开启时预读归档。关闭时桌面和网页预览按需读取磁盘，以减少内存占用。"; color: Theme.faint; font-size: Theme.font-hint; wrap: word-wrap; }
                                     Rectangle { height: 1px; background: #F1F3F8; }
                                     Text { text: "离线资源"; color: Theme.text; font-size: Theme.font-section; font-weight: 600; }
                                     Text { text: "私信图片始终保存；其他消息附件同样始终启用（包含已采集粉丝团）。头像、封面和评论配图默认只保留链接"; color: Theme.faint; font-size: Theme.font-hint; wrap: word-wrap; }

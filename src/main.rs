@@ -21,6 +21,7 @@ mod messages_ui;
 mod message_dates;
 mod qrlogin;
 mod secure;
+mod single_instance;
 mod web;
 mod web_images;
 mod preview_disk;
@@ -69,6 +70,7 @@ struct Cfg {
     export_dir: String,
     resource_policy: archive::ResourcePolicy,
     archive_precache: bool,
+    archive_worker_threads: Option<usize>,
 }
 
 impl Default for Cfg {
@@ -90,11 +92,16 @@ impl Default for Cfg {
             export_dir: String::new(),
             resource_policy: archive::ResourcePolicy::default(),
             archive_precache: true,
+            archive_worker_threads: None,
         }
     }
 }
 
 impl Cfg {
+    fn archive_workers(&self) -> usize {
+        self.archive_worker_threads.unwrap_or_else(local_read::workers)
+    }
+
     fn file() -> Option<PathBuf> {
         checkpoint::data_dir().ok().map(|d| d.join("config.json"))
     }
@@ -121,6 +128,10 @@ impl Cfg {
                     if let Some(b) = v["archive_precache"].as_bool() {
                         cfg.archive_precache = b;
                     }
+                    cfg.archive_worker_threads = v["archive_worker_threads"]
+                        .as_u64()
+                        .and_then(|count| usize::try_from(count).ok())
+                        .filter(|count| (1..=local_read::MAX_WORKERS).contains(count));
                     if let Some(b) = v["include_replies"].as_bool() {
                         cfg.include_replies = b;
                     }
@@ -185,6 +196,7 @@ impl Cfg {
             "export_dir": self.export_dir,
             "resource_policy": self.resource_policy,
             "archive_precache": self.archive_precache,
+            "archive_worker_threads": self.archive_worker_threads,
         });
         let secrets = secure::Secrets {
             sessdata: self.sessdata.clone(),
@@ -410,6 +422,12 @@ fn set_status(ui: &Weak<AppWindow>, text: String, ok: bool) {
 
 fn set_foot(ui: &Weak<AppWindow>, text: String) {
     emit(ui, move |w| w.set_foot_text(text.into()));
+}
+
+fn log_foot(shared: &Arc<Shared>, ui: &Weak<AppWindow>, text: impl Into<String>) {
+    let text = text.into();
+    push_log(shared, ui, &text);
+    set_foot(ui, text);
 }
 
 /// 风控弹窗：显示原因与倒计时
@@ -1001,10 +1019,18 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                 let uid=shared.account_uid.load(Ordering::SeqCst);
                 let snapshot=shared.doc.lock().unwrap().clone();let mut document=archive::from_comments(&snapshot,uid,&root,policy);
                 let result=archive::process_resources(&mut document,&root,&shared.cancel,|url,path|{messages::pause(Duration::from_millis(bili::random_delay_ms(low,high)),&shared.cancel)?;messages::download(url,path,&shared.cancel)},|n,total,saved,failed,_|set_progress(&ui,if total==0{1.0}else{n as f32/total as f32},format!("资源 {n}/{total} · 已保存 {saved} / 失败 {failed}")));
-                if let Err(error)=result{push_log(&shared,&ui,error.to_string());}
                 set_busy(&shared,&ui,false);
                 shared.message_active.store(false,Ordering::SeqCst);emit(&ui,|w|w.set_message_active(false));
-                if uid>0 && !shared.cancel.load(Ordering::SeqCst) {messages_ui::run(messages_ui::Action::Attachments(uid),&shared,&ui);}else{set_foot(&ui,if shared.cancel.load(Ordering::SeqCst){"资源处理已暂停或结束，已保存进度保留".into()}else{"评论资源处理完成；登录后可处理账号消息资源".into()});}
+                let cancelled = shared.cancel.load(Ordering::SeqCst);
+                match result {
+                    Err(error) => log_foot(&shared, &ui, format!("评论资源处理失败：{error:#}")),
+                    Ok(()) if cancelled => log_foot(&shared, &ui, "资源处理已暂停或结束，已保存进度保留"),
+                    Ok(()) if uid == 0 => log_foot(&shared, &ui, "评论资源处理完成；登录后可处理账号消息资源"),
+                    Ok(()) => {}
+                }
+                if uid > 0 && !cancelled {
+                    messages_ui::run(messages_ui::Action::Attachments(uid), &shared, &ui);
+                }
             }
             Cmd::AddVideos(items) => {
                 set_busy(&shared, &ui, true);
@@ -1042,7 +1068,7 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                 }
                 refresh_rows(&shared, &ui);
                 if added > 0 {
-                    set_foot(&ui, format!("已加入 {} 个稿件", added));
+                    log_foot(&shared, &ui, format!("已加入 {} 个稿件", added));
                 }
                 set_busy(&shared, &ui, false);
             }
@@ -1583,15 +1609,19 @@ fn split_tokens(text: &str) -> Vec<String> {
 // ---------------- 命令行模式（无界面，可脚本化） ----------------
 fn run_cli() -> Option<i32> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    match args.first().map(|s| s.as_str()) {
-        Some("serve") | Some("web") => return Some(cli_serve(&args[1..])),
-        Some("login") => return Some(cli_login(&args[1..])),
-        Some("crawl") => {}
+    let command: Option<fn(&[String]) -> i32> = match args.first().map(|s| s.as_str()) {
+        Some("serve" | "web") => Some(cli_serve),
+        Some("login") => Some(cli_login),
+        Some("crawl") => None,
         Some("-h") | Some("--help") | Some("help") => {
             print_help();
             return Some(0);
         }
         _ => return None,
+    };
+    bili::set_proxy(&Cfg::load().proxy);
+    if let Some(command) = command {
+        return Some(command(&args[1..]));
     }
     let mut targets: Vec<String> = Vec::new();
     let mut out = String::new();
@@ -2107,14 +2137,17 @@ fn main() -> Result<(), slint::PlatformError> {
     if std::env::args().nth(1).as_deref() == Some("--preview-worker") {
         std::process::exit(preview_process::run());
     }
-    // 代理策略要在任何请求之前定下来：配置里没写就直连，
-    // 不跟随环境变量里那些常常已经失效的 http_proxy / https_proxy
-    bili::set_proxy(&Cfg::load().proxy);
     if let Some(code) = run_cli() {
         std::process::exit(code);
     }
 
+    let Some(_desktop_lock) = single_instance::acquire_or_notify() else {
+        return Ok(());
+    };
+
     let cfg = Cfg::load();
+    // 先应用代理策略，再创建桌面和启动网络任务。
+    bili::set_proxy(&cfg.proxy);
     let ui = AppWindow::new()?;
 
     ui.set_sessdata(cfg.sessdata.clone().into());
@@ -2122,6 +2155,7 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.set_foot_text("就绪 · 扫码登录，或直接粘贴 BV 号".into());
     ui.set_web_port_text(cfg.web_port.to_string().into());
     ui.set_archive_precache(cfg.archive_precache);
+    ui.set_archive_workers_auto(local_read::workers() as i32);
     ui.set_export_dir_text(export_dir_of(&cfg).into());
     ui.set_resource_avatars(cfg.resource_policy.avatars);ui.set_resource_covers(cfg.resource_policy.covers);ui.set_resource_content_images(cfg.resource_policy.content_images);
     ui.set_page_delay_text(cfg.interval_ms.to_string().into());
@@ -2181,7 +2215,10 @@ fn main() -> Result<(), slint::PlatformError> {
         let shared = shared.clone();
         let weak = weak.clone();
         ui.on_read_archives(move |sessdata: SharedString| {
-            if shared.offline.load(Ordering::SeqCst){set_foot(&weak,"离线账号不能读取线上稿件".into());return;}
+            if shared.offline.load(Ordering::SeqCst) {
+                log_foot(&shared, &weak, "离线账号不能读取线上稿件");
+                return;
+            }
             let value = sessdata.to_string();
             shared.qr_gen.fetch_add(1, Ordering::SeqCst);
             emit(&weak, |w| w.set_qr_visible(false));
@@ -2291,7 +2328,10 @@ fn main() -> Result<(), slint::PlatformError> {
         let shared = shared.clone();
         let weak = weak.clone();
         ui.on_start(move || {
-            if shared.offline.load(Ordering::SeqCst){set_foot(&weak,"请先在线验证原账号后采集".into());return;}
+            if shared.offline.load(Ordering::SeqCst) {
+                log_foot(&shared, &weak, "请先在线验证原账号后采集");
+                return;
+            }
             if shared.busy.load(Ordering::SeqCst) {
                 return;
             }
@@ -2454,7 +2494,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let shared = shared.clone();
         let weak = weak.clone();
         ui.on_settings_open(move || {
-            let (port, dir, delay, delay_max, precache) = {
+            let (port, dir, delay, delay_max, precache, workers) = {
                 let cfg = shared.cfg.lock().unwrap();
                 (
                     cfg.web_port.to_string(),
@@ -2462,6 +2502,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     cfg.interval_ms.to_string(),
                     cfg.interval_max_ms.to_string(),
                     cfg.archive_precache,
+                    cfg.archive_worker_threads.map(|count| count.to_string()).unwrap_or_default(),
                 )
             };
             let policy=shared.cfg.lock().unwrap().resource_policy.clone();
@@ -2472,6 +2513,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 w.set_page_delay_text(delay.into());
                 w.set_page_delay_max_text(delay_max.into());
                 w.set_archive_precache(precache);
+                w.set_archive_workers_text(workers.into());
                 w.set_settings_visible(true);
             });
         });
@@ -2482,12 +2524,13 @@ fn main() -> Result<(), slint::PlatformError> {
         let weak = weak.clone();
         let settings_tx = tx.clone();
         ui.on_settings_apply(move || {
-            let (port_txt, dir, delay_txt, delay_max_txt) = match weak.upgrade() {
+            let (port_txt, dir, delay_txt, delay_max_txt, workers_txt) = match weak.upgrade() {
                 Some(w) => (
                     w.get_web_port_text().to_string(),
                     w.get_export_dir_text().to_string(),
                     w.get_page_delay_text().to_string(),
                     w.get_page_delay_max_text().to_string(),
+                    w.get_archive_workers_text().to_string(),
                 ),
                 None => return,
             };
@@ -2514,8 +2557,16 @@ fn main() -> Result<(), slint::PlatformError> {
                     return;
                 }
             };
+            let workers = match local_read::parse_workers(&workers_txt) {
+                Ok(workers) => workers,
+                Err(message) => {
+                    port_alert(&weak, message.into());
+                    return;
+                }
+            };
             let mut cfg = shared.cfg.lock().unwrap();
             let mut next = cfg.clone();
+            next.archive_worker_threads = workers;
             if let Some(w) = weak.upgrade() {
                 let precache = w.get_archive_precache();
                 if cfg.archive_precache != precache
@@ -2539,9 +2590,13 @@ fn main() -> Result<(), slint::PlatformError> {
                     drop(cfg);
                     if changed_mode { let _ = settings_tx.send(Cmd::ArchiveModeChanged); }
                     if changed_root {if let Err(e)=offline::forget_active(){push_log(&shared,&weak,e.to_string());}}
-                    set_foot(&weak, "设置已保存".into());
+                    log_foot(&shared, &weak, "设置已保存");
                 }
-                Err(e) => port_alert(&weak, format!("保存设置失败：{}", e)),
+                Err(e) => {
+                    let message = format!("保存设置失败：{}", e);
+                    port_alert(&weak, message.clone());
+                    log_foot(&shared, &weak, message);
+                }
             }
         });
     }
@@ -2639,7 +2694,10 @@ fn main() -> Result<(), slint::PlatformError> {
         let shared=shared.clone();let weak=weak.clone();let tx=tx.clone();
         ui.on_range_retry(move |ty| {
             if shared.busy.load(Ordering::SeqCst)||shared.loading_local.load(Ordering::SeqCst){return;}
-            if shared.account_uid.load(Ordering::SeqCst)==0 {set_foot(&weak,"请先登录以读取类型总数".into());return;}
+            if shared.account_uid.load(Ordering::SeqCst) == 0 {
+                log_foot(&shared, &weak, "请先登录以读取类型总数");
+                return;
+            }
             let Some(w)=weak.upgrade() else{return;};
             {
                 let session=shared.range_session.lock().unwrap();
@@ -3245,12 +3303,11 @@ mod export_directory_tests {
 
 fn load_startup_archives(shared: &Arc<Shared>, ui: &Weak<AppWindow>, uid: u64, expected_cookie: &str) {
     let _loading = LocalReadGuard::begin(shared, ui);
-    let (root, precache) = {
+    let (root, precache, workers) = {
         let cfg = shared.cfg.lock().unwrap();
-        (PathBuf::from(export_dir_of(&cfg)), cfg.archive_precache)
+        (PathBuf::from(export_dir_of(&cfg)), cfg.archive_precache, cfg.archive_workers())
     };
     let read_messages = || messages_ui::load_overview(shared, ui, uid);
-    let workers = local_read::workers();
     if !precache || !preview_disk::small_comment_archive(&root, uid) {
         let projection = preview_disk::desktop_projection(&root, uid);
         let cfg = shared.cfg.lock().unwrap();

@@ -434,7 +434,8 @@ impl AttachmentInventory {
         Value::Object(totals)
     }
 }
-pub fn load(root: &Path, uid: u64) -> Result<Store> {
+#[cfg(test)]
+fn load(root: &Path, uid: u64) -> Result<Store> {
     load_with_workers(root, uid, crate::local_read::workers())
 }
 pub fn load_with_workers(root: &Path, uid: u64, workers: usize) -> Result<Store> {

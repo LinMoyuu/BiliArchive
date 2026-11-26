@@ -153,9 +153,8 @@ fn publish_stats(shared: &Arc<Shared>, ui: &Weak<AppWindow>, uid: u64, snapshot_
     });
 }
 fn task_state(shared: &Arc<Shared>, ui: &Weak<AppWindow>, text: String, ratio: f32) {
-    push_log(shared, ui, &text);
     set_progress(ui, ratio, text.clone());
-    set_foot(ui, text.clone());
+    log_foot(shared, ui, text);
 }
 pub fn run(action: Action, shared: &Arc<Shared>, ui: &Weak<AppWindow>) {
     let uid = match &action {
@@ -166,15 +165,16 @@ pub fn run(action: Action, shared: &Arc<Shared>, ui: &Weak<AppWindow>) {
         | Action::Export(u, _) => *u,
     };
     if uid == 0 || uid != shared.account_uid.load(Ordering::SeqCst) {
-        set_foot(ui, "请先登录当前账号".into());
+        log_foot(shared, ui, "请先登录当前账号");
         return;
     }
     if shared.offline.load(Ordering::SeqCst)
         && matches!(&action, Action::Collect(..) | Action::RetryNg(_))
     {
-        set_foot(
+        log_foot(
+            shared,
             ui,
-            "离线账号仅可读取本地内容和处理公开附件，分页 NG 需在线验证原账号".into(),
+            "离线账号仅可读取本地内容和处理公开附件，分页 NG 需在线验证原账号",
         );
         return;
     }
@@ -207,11 +207,14 @@ pub fn run(action: Action, shared: &Arc<Shared>, ui: &Weak<AppWindow>) {
     let mut issue_logged = false;
     let mut report_path: Option<PathBuf> = None;
     let result = (|| -> Result<()> {
-        let root = PathBuf::from(export_dir_of(&shared.cfg.lock().unwrap()));
+        let (root, workers) = {
+            let cfg = shared.cfg.lock().unwrap();
+            (PathBuf::from(export_dir_of(&cfg)), cfg.archive_workers())
+        };
         // Always merge disk before doing work so repeated sessions preserve archives.
         {
             let _guard = LocalReadGuard::messages(shared, ui);
-            let loaded = messages::load(&root, uid)?;
+            let loaded = messages::load_with_workers(&root, uid, workers)?;
             if !loaded.notice.is_empty() {
                 push_log(shared, ui, &loaded.notice);
             }
@@ -448,7 +451,7 @@ pub fn run(action: Action, shared: &Arc<Shared>, ui: &Weak<AppWindow>) {
             Action::Export(_, path) => {
                 let _guard = LocalReadGuard::messages(shared, ui);
                 messages::export_bundle(&shared.messages.lock().unwrap(), &path)?;
-                set_foot(ui, format!("消息与附件已导出：{}", path.display()));
+                log_foot(shared, ui, format!("消息与附件已导出：{}", path.display()));
             }
         }
         Ok(())
@@ -478,8 +481,7 @@ pub fn run(action: Action, shared: &Arc<Shared>, ui: &Weak<AppWindow>) {
             };
             task_state(shared, ui, text, 0.0);
         } else {
-            push_log(shared, ui, format!("账号消息：{e:#}"));
-            set_foot(ui, format!("账号消息：{e:#}"));
+            log_foot(shared, ui, format!("账号消息：{e:#}"));
         }
         if let Some(path) = report_path {
             push_log(shared, ui, format!("本次报告：{}", path.display()));
@@ -576,6 +578,7 @@ pub fn install(
             let Some(w) = weak.upgrade() else { return };
             crate::message_dates::refresh_automatic_end(&w);
             if !crate::message_dates::validate(&w) {
+                log_foot(&shared, &weak, w.get_message_date_error().to_string());
                 return;
             }
             let types = [
@@ -600,7 +603,7 @@ pub fn install(
                         o,
                     )));
                 }
-                Err(e) => set_foot(&weak, e.to_string()),
+                Err(e) => log_foot(&shared, &weak, e.to_string()),
             }
         });
     }

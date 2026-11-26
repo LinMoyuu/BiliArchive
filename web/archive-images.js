@@ -29,7 +29,7 @@
  function track(img){
   const source=img.getAttribute('data-archive-src');
   if(!source||active.has(img)||finished.get(img)===source)return;
-  if(typeof IntersectionObserver==='undefined'){queued.add(img);schedule();return;}
+  if(typeof IntersectionObserver==='undefined'){queue(img);schedule();return;}
   const root=img.closest('[data-archive-scroll-root]');
   let observer=root?rootedObservers.get(root):defaultObserver;
   if(!observer&&root){observer=createObserver(root);rootedObservers.set(root,observer);}
@@ -64,6 +64,11 @@
    if(img.isConnected)frame.setAttribute('data-image-loading','');
   },120);
   indicators.set(img,{frame,timer,reasons:new Set([reason])});
+ }
+ function queue(img){
+  if(!eligible(img))return;
+  queued.add(img);
+  startIndicator(img);
  }
  function finish(img, state){
   const job=active.get(img);
@@ -106,7 +111,7 @@
    if(active.size>=maxActive)break;
    if([...holds.keys()].some(root=>root.contains(img)))continue;
    queued.delete(img);
-   if(!eligible(img))continue;
+   if(!eligible(img)){stopIndicator(img);continue;}
    unobserve(img);
    const source=img.getAttribute('data-archive-src');
    const job={source};
@@ -127,8 +132,8 @@
   const observer=new IntersectionObserver(entries=>{
    for(const entry of entries){
     if(observed.get(entry.target)!==observer)continue;
-    if(entry.isIntersecting)queued.add(entry.target);
-    else queued.delete(entry.target);
+    if(entry.isIntersecting)queue(entry.target);
+    else if(queued.delete(entry.target))stopIndicator(entry.target);
    }
    schedule();
   },{root,rootMargin:'120px'});
@@ -154,6 +159,11 @@
   }
   const previous=img.getAttribute('data-archive-src');
   if(previous===source||pendingOnly&&(active.has(img)||finished.has(img)))return;
+  if(queued.has(img)){
+   // Keep the waiting image in the same queue position with the same indicator.
+   img.setAttribute('data-archive-src',source);
+   return;
+  }
   // Transfer the frame's indicator from profile lookup to the new image.
   const preserveProfile=indicators.get(img)?.reasons.has('profile');
   cancel(img,preserveProfile);

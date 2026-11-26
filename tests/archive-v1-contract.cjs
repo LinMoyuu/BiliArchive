@@ -24,5 +24,11 @@ for(const edit of [d=>d.deferred_likes=-1,d=>d.status='completed',d=>d.issues[0]
 const legacySummary=structuredClone(sample);legacySummary.collection.errors=['unrelated'];assert(!valid(schema,legacySummary));
 const run=read('src/messages_run.rs'),integration=read('src/messages_ui.rs');
 assert(run.includes('bili-collection-report'));assert(run.includes('CrawlEvent::Waiting'));assert(run.includes('CrawlEvent::Deferred'));assert(run.includes('pub fn paging_failed'));assert(integration.includes('outcome.paging.ng'));assert(integration.includes('Action::RetryNg'));assert(run.includes('CrawlEvent::Recovered'));
-assert(integration.includes('messages::crawl_events_mode'));assert(!integration.includes('set_message_task_status'));assert(integration.includes('set_foot(ui, text.clone())'));assert(!integration.includes('for e in &errors'));
+assert(integration.includes('messages::crawl_events_mode'));assert(!integration.includes('set_message_task_status'));assert(!integration.includes('for e in &errors'));
+const taskState=integration.split('fn task_state(')[1].split('pub fn run(')[0];
+const footerLog=read('src/main.rs').split('fn log_foot(')[1].split('\n}')[0];
+assert(taskState.includes('log_foot(shared, ui, text)'));
+assert(!taskState.includes('push_log('));
+assert(footerLog.includes('push_log(shared, ui, &text)'));
+assert(footerLog.includes('set_foot(ui, text)'));
 console.log('PASS: archive v1 schema vocabulary, ten sources, string IDs, reference checks, invalid variants, mandatory image policy, removed import controls and shared desktop components, offline view maps and full-size single-like avatar');

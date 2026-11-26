@@ -57,6 +57,11 @@ vm.runInNewContext(read('web/archive-images.js'), {
 });
 const flush = () => { while(frames.length) frames.shift()(); };
 const intersect = (...images) => onIntersection(images.map(target => ({target, isIntersecting:true})));
+function tickIndicators(){
+ for(const [id,timer] of timers){
+  if(timer.delay===120){timers.delete(id);timer.callback();}
+ }
+}
 
 window.archiveImages.resume({querySelectorAll: () => first});
 flush();
@@ -74,6 +79,7 @@ assert.equal(first[0].getAttribute('data-image-state'),'loaded');
 for(const timer of [...timers.values()].filter(timer=>timer.delay===120))timer.callback();
 assert(!first[0].slot.hasAttribute('data-image-loading'),'cache hit never flashes a spinner');
 assert(first[1].slot.hasAttribute('data-image-loading'),'slow request animates on its frame');
+assert(!first[5].src && first[5].slot.hasAttribute('data-image-loading'),'visible images animate while waiting for a request slot');
 flush();
 assert(first[4].src, 'the next image starts after a slot opens');
 let interrupted = false;
@@ -99,17 +105,28 @@ assert(incoming.src);
 assert(first.slice(2).every(img => !img.src && !img.hasAttribute('data-image-state') && !img.slot.hasAttribute('data-image-loading')), 'switching cancels requests and animations');
 assert(first[0].src, 'already completed images survive switching');
 listeners.load({target:incoming});
-const undecided = image(other,'pending-map');
-const messageRoot = {contains: element => element === undecided};
+const undecided = image(other,'reply-cover');
+const replyAvatar = image(other,'reply-avatar');
+replyAvatar.setAttribute('data-reply-avatar','');
+const replyImages = [undecided, replyAvatar];
+const messageRoot = {contains: element => replyImages.includes(element), querySelectorAll: () => replyImages};
 window.archiveImages.hold(messageRoot);
-intersect(undecided);
+window.archiveImages.resume(messageRoot);
+intersect(...replyImages);
 flush();
-assert(!undecided.src, 'the image waits briefly for the local map without blocking the list');
+tickIndicators();
+assert(replyImages.every(img=>!img.src && img.slot.hasAttribute('data-image-loading')),
+ 'first reply images and avatars animate while the local resource map is pending');
 window.archiveImages.setSource(undecided,'/api/archive-resources/local',true);
+assert(undecided.slot.hasAttribute('data-image-loading'),'the local source update keeps the existing animation');
+onIntersection([{target:replyAvatar,isIntersecting:false}]);
+assert(!replyAvatar.slot.hasAttribute('data-image-loading'),'an offscreen queued avatar stops animating');
 window.archiveImages.release(messageRoot);
-intersect(undecided);
 flush();
 assert.equal(undecided.src,'/api/archive-resources/local');
+assert(!replyAvatar.src);
+listeners.load({target:undecided});
+assert(!undecided.slot.hasAttribute('data-image-loading'));
 
 const sidebar = {};
 const sessionAvatar = image({hidden:false,scrollRoot:sidebar},'session-avatar');
