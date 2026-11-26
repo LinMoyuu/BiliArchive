@@ -215,7 +215,7 @@ fn set_cover(subject: &mut Subject, raw: &str) {
     }
 }
 pub fn resolve(item: &Item) -> Option<Subject> {
-    if !matches!(item.ty.as_str(), "replies" | "mentions") {
+    if !matches!(item.ty.as_str(), "replies" | "mentions" | "likes") {
         return None;
     }
     let raw = &item.raw["item"];
@@ -305,10 +305,17 @@ pub fn summary(item: &Item) -> Value {
 }
 pub fn local_subjects(messages: &Doc, archive: &ArchiveDoc) -> BTreeMap<String, Subject> {
     let mut all = index(messages);
+    complete_from_comments(&mut all, archive);
+    all
+}
+
+pub(crate) fn complete_from_comments(all: &mut BTreeMap<String, Subject>, archive: &ArchiveDoc) {
     for v in &archive.videos {
         let s = match v.r#type.as_str() {
             "video" => target("video", &v.aid.to_string()),
             "dynamic" if v.dynamic_id > 0 => target("dynamic", &v.dynamic_id.to_string()),
+            "dynamic" => from_url(&v.url).filter(|subject| subject.ty == "dynamic"),
+            "article" => target("article", &v.aid.to_string()),
             _ => None,
         };
         if let Some(mut s) = s {
@@ -323,11 +330,13 @@ pub fn local_subjects(messages: &Doc, archive: &ArchiveDoc) -> BTreeMap<String, 
             s.title = v.title.clone();
             s.text = v.text.clone();
             if let Some(old) = all.get_mut(&s.key) {
+                if s.ty == "video" && !s.title.is_empty() {
+                    old.title = s.title.clone();
+                }
                 old.merge(&s);
             }
         }
     }
-    all
 }
 
 #[derive(Default)]
@@ -344,13 +353,20 @@ pub struct Service {
     changed: Condvar,
 }
 pub type Credentials = std::sync::Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
-fn cache_file(uid: &str) -> Result<std::path::PathBuf> {
-    if positive(uid).as_deref() != Some(uid) {
-        bail!("invalid account");
+fn cache_file(scope: &str) -> Result<std::path::PathBuf> {
+    let root = crate::checkpoint::data_dir()?.join("cache/message-subjects");
+    if let Some((library, uid)) = scope.split_once('/') {
+        anyhow::ensure!(
+            crate::library::valid_id(library) && positive(uid).as_deref() == Some(uid),
+            "invalid local library scope"
+        );
+        return Ok(root
+            .join("public")
+            .join(library)
+            .join(format!("{uid}.json")));
     }
-    Ok(crate::checkpoint::data_dir()?
-        .join("cache/message-subjects")
-        .join(format!("{uid}.json")))
+    anyhow::ensure!(positive(scope).as_deref() == Some(scope), "invalid account");
+    Ok(root.join(format!("{scope}.json")))
 }
 impl Service {
     pub fn lookup(
@@ -363,9 +379,28 @@ impl Service {
         self.lookup_with(uid, local, retry, |s| {
             credentials(uid)
                 .ok_or_else(|| anyhow!("账号已切换或未登录"))
-                .and_then(|cookie| fetch_subject(s, &cookie))
+                .and_then(|cookie| fetch_subject(s, Some(&cookie)))
         })
     }
+
+    pub fn lookup_public(
+        &self,
+        library: &str,
+        uid: &str,
+        local: Subject,
+        retry: bool,
+        current: impl Fn() -> bool,
+    ) -> Subject {
+        if !crate::library::valid_id(library) || positive(uid).as_deref() != Some(uid) {
+            return local;
+        }
+        let namespace = format!("{library}/{uid}");
+        self.lookup_with(&namespace, local, retry, |subject| {
+            anyhow::ensure!(current(), "资料库已切换");
+            fetch_subject(subject, None)
+        })
+    }
+
     fn lookup_with(
         &self,
         uid: &str,
@@ -427,14 +462,8 @@ impl Service {
                     .or_default()
                     .insert(local.key.clone(), local.clone());
                 if let Ok(path) = cache_file(uid) {
-                    if let Some(parent) = path.parent() {
-                        let _ = std::fs::create_dir_all(parent);
-                    }
-                    if let Ok(bytes) = serde_json::to_vec(&state.accounts[uid]) {
-                        let tmp = path.with_extension("tmp");
-                        if std::fs::write(&tmp, bytes).is_ok() {
-                            let _ = std::fs::rename(tmp, path);
-                        }
+                    if let Ok(value) = serde_json::to_value(&state.accounts[uid]) {
+                        let _ = crate::secure::write_config(&path, &value);
                     }
                 }
             }
@@ -459,7 +488,11 @@ impl Service {
         local
     }
 }
-fn fetch_subject(subject: &Subject, cookie: &str) -> Result<Subject> {
+fn fetch_subject(subject: &Subject, cookie: Option<&str>) -> Result<Subject> {
+    anyhow::ensure!(
+        positive(&subject.id).as_deref() == Some(subject.id.as_str()),
+        "invalid subject ID"
+    );
     let url = match subject.ty.as_str() {
         "video" => format!(
             "https://api.bilibili.com/x/web-interface/view?aid={}",
@@ -471,17 +504,19 @@ fn fetch_subject(subject: &Subject, cookie: &str) -> Result<Subject> {
         ),
         _ => bail!("unsupported subject"),
     };
-    let cookie = if cookie.contains('=') {
-        cookie.to_owned()
-    } else {
-        format!("SESSDATA={cookie}")
-    };
-    let response = crate::bili::http_client()?
+    let mut request = crate::bili::http_client()?
         .get(url)
         .timeout(Duration::from_secs(10))
-        .header("Referer", "https://www.bilibili.com/")
-        .header("Cookie", cookie)
-        .send()?;
+        .header("Referer", "https://www.bilibili.com/");
+    if let Some(cookie) = cookie {
+        let cookie = if cookie.contains('=') {
+            cookie.to_owned()
+        } else {
+            format!("SESSDATA={cookie}")
+        };
+        request = request.header("Cookie", cookie);
+    }
+    let response = request.send()?;
     if !response.status().is_success() {
         bail!("HTTP {}", response.status().as_u16());
     }
@@ -543,6 +578,17 @@ fn fetch_subject(subject: &Subject, cookie: &str) -> Result<Subject> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn public_cache_uses_both_library_and_account() {
+        let first = "0123456789abcdef0123456789abcdef";
+        let second = "fedcba9876543210fedcba9876543210";
+        let local = cache_file(&format!("{first}/12")).unwrap();
+        assert!(local.ends_with(std::path::Path::new("public").join(first).join("12.json")));
+        assert_ne!(local, cache_file(&format!("{second}/12")).unwrap());
+        assert_ne!(local, cache_file("12").unwrap());
+        assert!(cache_file("../12").is_err());
+    }
     fn row(url: &str, raw: Value) -> Item {
         Item {
             ty: "replies".into(),

@@ -228,37 +228,17 @@ fn activate(account: &Account, shared: &Arc<Shared>, ui: &Weak<AppWindow>) -> Re
     );
     let _reading = LocalReadGuard::begin(shared, ui);
     set_foot(ui, "正在后台读取本地评论和消息…".into());
-    let workers = crate::local_read::workers();
-    if workers > 1 && account.uid != 0 {
-        std::thread::scope(|scope| -> Result<()> {
-            let message_root = &root;
-            let messages =
-                scope.spawn(move || messages::load_with_workers(message_root, account.uid, 1));
-            let comments = read_comments(&root, account.uid, workers - 1)?;
-            activate_loaded(
-                account,
-                shared,
-                ui,
-                root.clone(),
-                comments,
-                messages::Store::default(),
-            )?;
-            match messages.join().expect("message reader panicked") {
-                Ok(store) => {
-                    *shared.messages.lock().unwrap() = store;
-                    messages_ui::refresh(shared, ui);
-                    refresh_offline_avatar(account, &root, shared, ui);
-                }
-                Err(error) => push_log(shared, ui, format!("读取本地消息失败：{error:#}")),
-            }
-            set_foot(ui, format!("离线账号 {} · 本地读取完成", account.name));
-            Ok(())
-        })
+    let precache = shared.cfg.lock().unwrap().archive_precache;
+    let comments = if precache && crate::preview_disk::small_comment_archive(&root, account.uid) {
+        read_comments(&root, account.uid, crate::local_read::workers())?
     } else {
-        let comments = read_comments(&root, account.uid, 1)?;
-        let messages = load_account_messages(&root, account.uid, 1)?;
-        activate_loaded(account, shared, ui, root, comments, messages)
+        crate::preview_disk::desktop_projection(&root, account.uid)
+    };
+    activate_loaded(account, shared, ui, root, comments, messages::Store::default())?;
+    if precache && account.uid != 0 {
+        messages_ui::load_overview(shared, ui, account.uid);
     }
+    Ok(())
 }
 
 fn load_account_messages(root: &Path, uid: u64, workers: usize) -> Result<messages::Store> {

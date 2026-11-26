@@ -4,7 +4,7 @@
  const choices={comments:document.getElementById('workspace-comments'),messages:document.getElementById('workspace-messages')};
  const roots={comments:document.getElementById('comment-workspace'),messages:document.getElementById('message-workspace')};
  const heads={comments:document.getElementById('comment-header'),messages:document.getElementById('message-header')};
- const instances={},scrolls={},routes={comments:new URL('/',location.href),messages:new URL('/messages',location.href)};
+ const instances={},scrolls={},routes={comments:new URL('/comments',location.href),messages:new URL('/messages',location.href)};
  let active=null,epoch=0;
  const which=()=>location.pathname.replace(/\/$/,'')==='/messages'?'messages':'comments';
  const saveScroll=key=>{scrolls[key]=[roots[key],...roots[key].querySelectorAll('*')].filter(e=>e.scrollHeight>e.clientHeight||e.scrollWidth>e.clientWidth).map(e=>[e,e.scrollTop,e.scrollLeft]);};
@@ -16,11 +16,12 @@
  function context(key){return {scrollChanged:updateTopButton,root:roots[key],head:heads[key],active:()=>active===key,url:()=>routes[key],replaceHash(hash){const next=new URL(routes[key]);next.hash=hash;routes[key]=next;if(active===key)history.replaceState({workspace:key},'',next.pathname+next.search+next.hash);}};}
  function activate(key,push=false,fromHistory=false){
   if(!roots[key])return;
-  if(active){saveScroll(active);instances[active]?.deactivate?.();if(!fromHistory)routes[active]=new URL(location.href);}
+  if(active){window.archiveImages?.pause(roots[active]);saveScroll(active);instances[active]?.deactivate?.();if(!fromHistory)routes[active]=new URL(location.href);}
   active=key;const token=++epoch;
   if(push){const next=routes[key];history.pushState({workspace:key},'',next.pathname+next.search+next.hash);}
   else routes[key]=new URL(location.href);
   for(const name of Object.keys(roots)){roots[name].hidden=name!==key;heads[name].hidden=name!==key;}
+  window.archiveImages?.resume(roots[key]);
   const name=key==='comments'?'评论聚合台':'消息归档台';document.title=name+' · BiliArchive';
   document.getElementById('product-name').textContent=name;
   document.getElementById('product-icon').textContent=key==='comments'?'评':'信';
@@ -39,7 +40,10 @@
  toggle.onkeydown=e=>{if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();openMenu();}};
  menu.onkeydown=e=>{const list=Object.values(choices);const index=list.indexOf(document.activeElement);if(e.key==='Escape'){e.preventDefault();closeMenu();toggle.focus();}else if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();list[(index+(e.key==='ArrowDown'?1:-1)+list.length)%list.length].focus();}else if(e.key==='Tab'){closeMenu();}};
  document.addEventListener('click',e=>{if(!toggle.contains(e.target)&&!menu.contains(e.target))closeMenu();});
- window.addEventListener('accountchange',e=>instances.messages?.accountChanged?.(e.detail.uid));
+ window.addEventListener('accountchange',e=>{
+  instances.comments?.accountChanged?.();
+  instances.messages?.accountChanged?.(e.detail.uid);
+ });
  window.addEventListener('popstate',()=>activate(which(),false,true));
  window.addEventListener('hashchange',()=>{if(active==='comments'){routes.comments=new URL(location.href);instances.comments?.activate?.(true);}});
  routes[which()]=new URL(location.href);activate(which());

@@ -1,6 +1,6 @@
 //! ZIP32 stored/deflate transport for offline libraries (no credentials, no executable entries).
 //! Container specification: https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use std::{
     collections::BTreeSet,
     fs::File,

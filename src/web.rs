@@ -1,5 +1,5 @@
 //! 内置的本地 Web 服务：把整合好的评论数据用网页列出来，
-//! 同时提供 /api/data.json 接口给别的程序消费。
+//! 同时提供 /api/comments/data.json 接口给别的程序消费。
 //! 只用标准库的 TcpListener，不额外引 HTTP 框架。
 
 use crate::export;
@@ -73,7 +73,28 @@ pub fn spawn_with_profile_pacing(
     credentials: crate::message_subjects::Credentials,
     pacing: crate::message_profiles::Pacing,
 ) -> Result<u16, String> {
+    spawn_inner(doc, messages, account, base_port, stop, credentials, pacing, None)
+}
+
+type DiskService = (Arc<crate::preview_disk::Disk>, Arc<crate::preview_process::Broker>);
+
+pub fn spawn_disk(port: u16, disk: Arc<crate::preview_disk::Disk>, broker: Arc<crate::preview_process::Broker>) -> Result<u16, String> {
+    spawn_inner(Arc::default(), Arc::default(), Arc::default(), port,
+        Arc::default(), Arc::new(|_| None), Arc::new(|| (1800, 2400)), Some((disk, broker)))
+}
+
+fn spawn_inner(
+    doc: Arc<Mutex<ArchiveDoc>>,
+    messages: Arc<Mutex<messages::Store>>,
+    account: Arc<Mutex<crate::account_ui::PublicAccount>>,
+    base_port: u16,
+    stop: Arc<AtomicBool>,
+    credentials: crate::message_subjects::Credentials,
+    pacing: crate::message_profiles::Pacing,
+    disk: Option<DiskService>,
+) -> Result<u16, String> {
     let profiles = Arc::new(crate::message_profiles::Service::default());
+    let images = Arc::new(crate::web_images::Cache::default());
     let subjects = Arc::new(crate::message_subjects::Service::default());
     let listener = TcpListener::bind(("127.0.0.1", base_port)).map_err(|e| {
         if e.kind() == std::io::ErrorKind::AddrInUse {
@@ -94,7 +115,9 @@ pub fn spawn_with_profile_pacing(
                     let account = account.clone();
                     let subjects = subjects.clone(); let credentials = credentials.clone();
                     let profiles = profiles.clone(); let pacing = pacing.clone();
-                    std::thread::spawn(move || handle(s, doc, messages, account, subjects, credentials, profiles, pacing));
+                    let images = images.clone();
+                    let disk = disk.clone();
+                    std::thread::spawn(move || handle(s, doc, messages, account, subjects, credentials, profiles, pacing, images, disk));
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     std::thread::sleep(Duration::from_millis(25));
@@ -106,6 +129,30 @@ pub fn spawn_with_profile_pacing(
     Ok(port)
 }
 
+fn comment_image_scope(doc: &ArchiveDoc) -> Option<crate::web_images::Scope> {
+    crate::web_images::Scope::new(
+        crate::archive::comment_root(doc),
+        &crate::archive::comment_account(doc).to_string(),
+    )
+}
+
+fn image_scopes(
+    doc: &Mutex<ArchiveDoc>,
+    messages: &Mutex<messages::Store>,
+    account: &Mutex<crate::account_ui::PublicAccount>,
+) -> Vec<crate::web_images::Scope> {
+    let uid = account.lock().unwrap().uid.clone();
+    let comment = comment_image_scope(&doc.lock().unwrap()).filter(|scope| scope.visible_to(&uid));
+    let state = messages.lock().unwrap();
+    let message = if state.root.as_os_str().is_empty()
+        || (!uid.is_empty() && uid != state.doc.account_uid) {
+        None
+    } else {
+        crate::web_images::Scope::new(crate::archive::storage_root(&state.root), &state.doc.account_uid)
+    };
+    message.into_iter().chain(comment).collect()
+}
+
 fn handle(
     mut stream: TcpStream,
     doc: Arc<Mutex<ArchiveDoc>>,
@@ -115,8 +162,11 @@ fn handle(
     credentials: crate::message_subjects::Credentials,
     profiles: Arc<crate::message_profiles::Service>,
     pacing: crate::message_profiles::Pacing,
+    images: Arc<crate::web_images::Cache>,
+    disk: Option<DiskService>,
 ) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(15)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(15)));
     let rd = match stream.try_clone() {
         Ok(s) => s,
         Err(_) => return,
@@ -178,7 +228,15 @@ fn handle(
         })
     };
 
-    if path == "/api/account" || path == "/messages" || path == "/messages/" || path.starts_with("/api/messages/") || path.starts_with("/api/archive-resources/") || path == "/api/archive.json" {
+    let view = disk.as_ref().map(|(disk, _)| disk.view());
+    let current = || disk.as_ref().zip(view.as_ref()).is_none_or(|((disk, _), view)| disk.is_current(view));
+    let offline = view.as_ref().map_or_else(|| crate::library::offline(), |view| view.scope.offline);
+    let reject_changed = |stream: &mut TcpStream| -> bool {
+        if current() { return false; }
+        respond_private(stream, "409 Conflict", "text/plain", b"account changed", method == "HEAD");
+        true
+    };
+    if path.starts_with("/api/") || matches!(path.as_str(), "/comments" | "/messages") {
         let local_host = host == "127.0.0.1"
             || host
                 .strip_prefix("127.0.0.1:")
@@ -193,47 +251,116 @@ fn handle(
             );
             return;
         }
-        if path == "/messages" || path == "/messages/" {
-            respond_private(
-                &mut stream,
-                "200 OK",
-                "text/html; charset=utf-8",
-                INDEX_HTML.as_bytes(),
-                method == "HEAD",
-            );
+        if matches!(path.as_str(), "/comments" | "/messages") {
+            respond_html(&mut stream, method == "HEAD", offline);
             return;
         }
         if path == "/api/account" {
-            let body = serde_json::to_vec(&*account.lock().unwrap()).unwrap();
+            let body = view.as_ref().map_or_else(|| serde_json::to_vec(&*account.lock().unwrap()), |view| serde_json::to_vec(&view.scope.account)).unwrap();
             respond_private(&mut stream, "200 OK", "application/json; charset=utf-8", &body, method == "HEAD");
             return;
         }
-        if path=="/api/archive.json" {let body=export::to_json(&doc.lock().unwrap()).unwrap_or_else(|_|"{}".into());respond_private(&mut stream,"200 OK","application/json; charset=utf-8",body.as_bytes(),method=="HEAD");return;}
-        if let Some(key)=path.strip_prefix("/api/archive-resources/") {
-            let (message_doc,resource_root)={let state=messages.lock().unwrap();(state.doc.clone(),if state.root.as_os_str().is_empty(){crate::archive::comment_root(&doc.lock().unwrap())}else{crate::archive::storage_root(&state.root)})};
-            let uid=message_doc.account_uid.clone();let policy=crate::archive::ResourcePolicy::load();
-            let mut resources=crate::archive::message_resources(&message_doc,&resource_root,policy.clone());
-            {let snapshot=doc.lock().unwrap();resources.extend(crate::archive::from_comments(&snapshot,crate::archive::comment_account(&snapshot),&resource_root,policy).resources);}
-            let file=resources.get(key).and_then(|r|r["path"].as_str()).and_then(|p|crate::archive::resource_file(&resource_root,p));
-            if messages.lock().unwrap().doc.account_uid!=uid {respond_private(&mut stream,"409 Conflict","text/plain",b"account changed",method=="HEAD");return;}
-            match file.and_then(|p|std::fs::File::open(&p).ok().map(|f|(f,crate::messages::media_type(&p)))) {
-                Some((file,mime))=>respond_private_file(&mut stream,file,mime,method=="HEAD"),
-                None=>respond_private(&mut stream,"404 Not Found","text/plain",b"not found",method=="HEAD"),
-            }return;
+        if path=="/api/comments/archive.json" {
+            let archive = view.as_ref().map(|view| view.comments(None));
+            let body = archive.as_ref().map_or_else(|| export::to_json(&doc.lock().unwrap()), export::to_json).unwrap_or_else(|_| "{}".into());
+            if reject_changed(&mut stream) { return; }respond_private(&mut stream,"200 OK","application/json; charset=utf-8",body.as_bytes(),method=="HEAD");return;}
+        if let Some(key) = path.strip_prefix("/api/archive-resources/") {
+            let scopes = view.as_ref().map_or_else(|| image_scopes(&doc, &messages, &account), |view| view.image_scope().into_iter().collect());
+            let token = param("scope");
+            let file = scopes.iter()
+                .filter(|scope| token.as_ref().is_none_or(|token| token == &scope.token()))
+                .find_map(|scope| images.get(scope).open(scope, key));
+            if !current() || (view.is_none() && scopes != image_scopes(&doc, &messages, &account)) {
+                respond_private(&mut stream, "409 Conflict", "text/plain", b"account changed", method == "HEAD");
+                return;
+            }
+            if let Some((file, mime)) = file {
+                respond_private_file(&mut stream, file, mime, method == "HEAD");
+            } else {
+                respond_private(&mut stream, "404 Not Found", "text/plain", b"not found", method == "HEAD");
+            }
+            return;
         }
+    }
+    if path.starts_with("/api/messages/") {
+        if path == "/api/messages/summary" && param("identity").as_deref() == Some("1") {
+            if let Some(view) = &view {
+                let uid = (view.scope.uid != 0).then(|| view.scope.uid.to_string()).unwrap_or_default();
+                let body = json!({"account_uid": uid}).to_string();
+                respond_private(&mut stream, "200 OK", "application/json; charset=utf-8", body.as_bytes(), method == "HEAD");
+                return;
+            }
+        }
+        if let Some(view) = &view {
+            let ty = param("type").unwrap_or_default();
+            let session = param("session").unwrap_or_default();
+            let body = if path == "/api/messages/summary" {
+                Some(view.message_summary(Some(&images)))
+            } else if path == "/api/messages/items" && matches!(ty.as_str(), "private" | "groups") && param("group_by").is_none() && param("group_key").is_none() {
+                let offset = param("offset").and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
+                let limit = param("limit").and_then(|s| s.parse::<usize>().ok()).unwrap_or(50).clamp(1, 200);
+                let query = param("q").unwrap_or_default();
+                let ascending = param("order").as_deref() == Some("old");
+                let include_groups = ty == "private" && param("include_groups").as_deref() == Some("1");
+                Some(view.private_page(&ty, &session, &query, ascending, offset, limit, include_groups))
+            } else {
+                None
+            };
+            if let Some(body) = body {
+                if reject_changed(&mut stream) { return; }
+                respond_private(&mut stream, "200 OK", "application/json; charset=utf-8", body.to_string().as_bytes(), method == "HEAD");
+                return;
+            }
+            if let Some(key) = path.strip_prefix("/api/messages/attachments/") {
+                let file = view.attachment(key);
+                if reject_changed(&mut stream) { return; }
+                if let Some((file, ctype)) = file.and_then(|path| {
+                    let ctype = messages::media_type(&path);
+                    Some((std::fs::File::open(path).ok()?, ctype))
+                }) {
+                    respond_private_file(&mut stream, file, ctype, method == "HEAD");
+                } else {
+                    respond_private(&mut stream, "404 Not Found", "text/plain", b"attachment not found", method == "HEAD");
+                }
+                return;
+            }
+        }
+        let messages = if let Some(view) = &view {
+            let ty = match path.as_str() {
+                "/api/messages/likes" => "likes".to_owned(),
+                "/api/messages/profile" | "/api/messages/subjects" => String::new(),
+                "/api/messages/items" | "/api/messages/groups" => param("type").unwrap_or_else(|| "all".into()),
+                _ => "all".into(),
+            };
+            view.messages(&ty, &param("session").unwrap_or_default())
+        } else { messages };
+        if reject_changed(&mut stream) { return; }
         let state = messages.lock().unwrap();
         if path == "/api/messages/profile" {
             let uid = state.doc.account_uid.clone();
             if param("account_uid").as_deref() != Some(uid.as_str()) {
                 respond_private(&mut stream, "409 Conflict", "text/plain", b"account changed", method == "HEAD"); return;
             }
-            let local = crate::message_profiles::local_profiles(&state.doc);
-            let found = param("uid").and_then(|key| local.get(&key).cloned());
+            let found = param("uid").and_then(|key| {
+                if let Some(view) = &view { view.profile(&key) }
+                else { crate::message_profiles::local_profiles(&state.doc).remove(&key) }
+            });
             let Some(profile) = found else {
                 respond_private(&mut stream, "400 Bad Request", "text/plain", b"unknown archived user", method == "HEAD"); return;
             };
             drop(state);
-            let profile = if method == "HEAD" || crate::library::offline() { profile } else { profiles.lookup(&uid, profile, param("retry").as_deref() == Some("1"), &credentials, &pacing) };
+            let retry = param("retry").as_deref() == Some("1");
+            let profile = if method == "HEAD" || offline {
+                profile
+            } else if let Some(((_, broker), view)) = disk.as_ref().zip(view.as_ref()) {
+                match broker.lookup(&view.scope, crate::preview_process::Lookup::Profile(profile.clone()), retry) {
+                    crate::preview_process::Lookup::Profile(answer) => answer,
+                    _ => profile,
+                }
+            } else {
+                profiles.lookup(&uid, profile, retry, &credentials, &pacing)
+            };
+            if reject_changed(&mut stream) { return; }
             if messages.lock().unwrap().doc.account_uid != uid {
                 respond_private(&mut stream, "409 Conflict", "text/plain", b"account changed", method == "HEAD"); return;
             }
@@ -248,13 +375,25 @@ fn handle(
             let keys: Vec<String> = param("keys").unwrap_or_default().split(',').filter(|s|!s.is_empty()).map(str::to_owned).collect();
             if keys.is_empty() || keys.len()>2 {respond_private(&mut stream,"400 Bad Request","text/plain",b"one or two subject keys required",method=="HEAD");return;}
             let message_doc = state.doc.clone(); drop(state);
-            let local = crate::message_subjects::local_subjects(&message_doc, &doc.lock().unwrap());
+            let local = if let Some(view) = &view {
+                view.subjects(&keys)
+            } else { crate::message_subjects::local_subjects(&message_doc, &doc.lock().unwrap()) };
             if keys.iter().any(|key|!local.contains_key(key)) {respond_private(&mut stream,"400 Bad Request","text/plain",b"unknown subject",method=="HEAD");return;}
             let retry=param("retry").as_deref()==Some("1");
             let items: Vec<_> = keys.iter().map(|key| {
                 let subject=local[key].clone();
-                if method=="HEAD" || crate::library::offline() {subject} else {subjects.lookup(&uid,subject,retry,&credentials)}
+                use crate::preview_process::Lookup;
+                if method == "HEAD" || !subject.missing() { return subject; }
+                if let Some(((_, broker), view)) = disk.as_ref().zip(view.as_ref()) {
+                    let request = if offline { Lookup::PublicSubject(subject.clone()) } else { Lookup::Subject(subject.clone()) };
+                    match broker.lookup(&view.scope, request, retry) {
+                        Lookup::Subject(answer) | Lookup::PublicSubject(answer) => answer,
+                        _ => subject,
+                    }
+                } else if offline { subject }
+                else { subjects.lookup(&uid, subject, retry, &credentials) }
             }).collect();
+            if reject_changed(&mut stream) { return; }
             if messages.lock().unwrap().doc.account_uid!=uid {respond_private(&mut stream,"409 Conflict","text/plain",b"account changed",method=="HEAD");return;}
             let body=json!({"account_uid":uid,"subjects":items}).to_string();
             respond_private(&mut stream,"200 OK","application/json; charset=utf-8",body.as_bytes(),method=="HEAD");return;
@@ -270,14 +409,20 @@ fn handle(
             let message_doc = state.doc.clone();
             let resource_root = crate::archive::storage_root(&state.root);
             drop(state);
-            let mut view = if crate::library::offline() {
+            let mut view = if offline {
                 message_doc.summary()
             } else {
                 profiles.summary(&message_doc)
             };
-            view["resource_images"] = crate::archive::resource_images(
-                &crate::archive::message_resources(&message_doc, &resource_root, crate::archive::ResourcePolicy::load()),
-            );
+            let mut attachments = messages::AttachmentInventory::default();
+            attachments.add(&message_doc);
+            view["attachments_by_type"] = attachments.counts(&resource_root, &message_doc.account_uid);
+            if let Some(scope) = crate::web_images::Scope::new(resource_root, &message_doc.account_uid) {
+                let index = images.get(&scope);
+                view["resource_images"] = serde_json::Value::Object(
+                    index.resource_images(message_doc.archive["resources"].as_object()),
+                );
+            }
             let body = view.to_string();
             respond_private(
                 &mut stream,
@@ -345,7 +490,7 @@ fn handle(
             let total = list.len();
             let page: Vec<_> = list.into_iter().skip(offset).take(limit).collect();
             let known = if page.iter().any(|i| i.ty == "private") {
-                if crate::library::offline(){crate::message_profiles::local_profiles(&state.doc)}else{profiles.snapshot(&state.doc.account_uid, crate::message_profiles::local_profiles(&state.doc))}
+                if offline{crate::message_profiles::local_profiles(&state.doc)}else{profiles.snapshot(&state.doc.account_uid, crate::message_profiles::local_profiles(&state.doc))}
             } else { Default::default() };
             let view=json!({"account_uid":state.doc.account_uid,"total":total,"items":page.into_iter().map(|i| crate::message_profiles::item_summary(i, &known)).collect::<Vec<_>>()});
             drop(state);
@@ -447,6 +592,10 @@ fn handle(
             method == "HEAD",
         ),
         "/assets/noface.jpg" => respond(&mut stream, "200 OK", "image/jpeg", include_bytes!("../assets/noface.jpg")),
+        "/assets/archive-loading.js" => respond_private(
+            &mut stream, "200 OK", "text/javascript; charset=utf-8",
+            include_bytes!("../web/archive-loading.js"), method == "HEAD",
+        ),
         "/assets/archive-images.js" => respond(&mut stream, "200 OK", "text/javascript; charset=utf-8", include_bytes!("../web/archive-images.js")),
         "/assets/account.js" => respond(&mut stream, "200 OK", "text/javascript; charset=utf-8", include_bytes!("../web/account.js")),
         "/assets/workspaces.js" => respond_private(
@@ -457,33 +606,57 @@ fn handle(
             method == "HEAD",
         ),
 
-        "/" | "/index.html" => respond(
-            &mut stream,
-            "200 OK",
-            "text/html; charset=utf-8",
-            INDEX_HTML.as_bytes(),
-        ),
+        "/" | "/index.html" | "/comments/" => redirect_workspace(&mut stream, "/comments", &query),
+        "/messages/" => redirect_workspace(&mut stream, "/messages", &query),
         "/health" => respond(&mut stream, "200 OK", "text/plain; charset=utf-8", b"ok"),
-        "/api/archive.json" => {
-            let body=export::to_json(&doc.lock().unwrap()).unwrap_or_else(|_|"{}".into());
-            respond_private(&mut stream,"200 OK","application/json; charset=utf-8",body.as_bytes(),method=="HEAD");
-        }
-        "/api/data.json" => {
-            let body = {
-                let d = doc.lock().unwrap();
-                let mut view=serde_json::to_value(&*d).unwrap_or_default();crate::archive::string_ids(&mut view);
-                view["resource_images"]=crate::archive::resource_images(&crate::archive::from_comments(&d,crate::archive::comment_account(&d),&crate::archive::comment_root(&d),crate::archive::ResourcePolicy::load()).resources);
-                crate::archive::localize_view(&mut view,&crate::archive::comment_root(&d),&crate::archive::comment_account(&d).to_string());
-                view.to_string()
+        "/api/comments/data.json" => {
+            if let Some(view) = &view {
+                if param("view").as_deref() == Some("list") {
+                    let list = view.list();
+                    if reject_changed(&mut stream) { return; }
+                    let mut result = (*list).clone();
+                    if let Some(scope) = view.image_scope() {
+                        let mut urls = serde_json::Map::new();
+                        images.get(&scope).localize(&mut result, &mut urls);
+                        result["resource_images"] = serde_json::Value::Object(urls);
+                    }
+                    let body = result.to_string();
+                    respond_private(&mut stream, "200 OK", "application/json; charset=utf-8", body.as_bytes(), method == "HEAD");
+                    return;
+                }
+                if param("view").as_deref() == Some("search") {
+                    let body = json!(view.search(&param("q").unwrap_or_default())).to_string();
+                    if reject_changed(&mut stream) { return; }
+                    respond_private(&mut stream, "200 OK", "application/json; charset=utf-8", body.as_bytes(), method == "HEAD");
+                    return;
+                }
+            }
+            let (mut view, scope) = {
+                if let Some(view) = &view {
+                    let snapshot = view.comments(None);
+                    (serde_json::to_value(&snapshot).unwrap_or_default(), view.image_scope())
+                } else {
+                    let snapshot = doc.lock().unwrap();
+                    (serde_json::to_value(&*snapshot).unwrap_or_default(), comment_image_scope(&snapshot))
+                }
             };
-            respond(
-                &mut stream,
-                "200 OK",
-                "application/json; charset=utf-8",
-                body.as_bytes(),
-            );
+            crate::archive::string_ids(&mut view);
+            if let Some(scope) = scope {
+                let index = images.get(&scope);
+                let mut urls = serde_json::Map::new();
+                index.localize(&mut view, &mut urls);
+                view["resource_images"] = serde_json::Value::Object(urls);
+            }
+            let body = view.to_string();
+            respond(&mut stream, "200 OK", "application/json; charset=utf-8", body.as_bytes());
         }
-        "/api/videos" => {
+        "/api/comments/posts" => {
+            if let Some(view) = &view {
+                let body = view.post_summaries().to_string();
+                if reject_changed(&mut stream) { return; }
+                respond_private(&mut stream, "200 OK", "application/json; charset=utf-8", body.as_bytes(), method == "HEAD");
+                return;
+            }
             let body = {
                 let d = doc.lock().unwrap();
                 let list: Vec<serde_json::Value> = d
@@ -520,15 +693,30 @@ fn handle(
                 body.as_bytes(),
             );
         }
-        "/api/video" => {
-            let aid: u64 = param("aid").and_then(|s| s.parse().ok()).unwrap_or(0);
-            let body = {
-                let d = doc.lock().unwrap();
-                match d.videos.iter().find(|v| v.aid == aid) {
-                    Some(v) => serde_json::to_string(v).unwrap_or_else(|_| "{}".into()),
-                    None => "{\"error\":\"not found\"}".to_string(),
-                }
+        path if path.starts_with("/api/comments/posts/") => {
+            let Some(aid) = path.strip_prefix("/api/comments/posts/").and_then(|id| id.parse::<u64>().ok()).filter(|id| *id > 0) else {
+                respond_private(&mut stream, "404 Not Found", "text/plain", b"not found", method == "HEAD");
+                return;
             };
+            let projection = view.as_ref().map(|view| view.comments(Some(aid)));
+            if reject_changed(&mut stream) { return; }
+            let live = doc.lock().unwrap();
+            let snapshot = projection.as_ref().unwrap_or(&live);
+            let type_id = param("comment_type").and_then(|value| value.parse::<u32>().ok());
+            let found = snapshot.videos.iter().find(|v| v.aid == aid && type_id.is_none_or(|ty| v.reply_type() == ty));
+            let body = if let Some(video) = found {
+                let mut result = serde_json::to_value(video).unwrap_or_default();
+                if param("view").as_deref() == Some("detail") {
+                    crate::archive::string_ids(&mut result);
+                    let scope = view.as_ref().and_then(|view| view.image_scope()).or_else(|| comment_image_scope(snapshot));
+                    if let Some(scope) = scope {
+                        let mut urls = serde_json::Map::new();
+                        images.get(&scope).localize(&mut result, &mut urls);
+                        result["resource_images"] = serde_json::Value::Object(urls);
+                    }
+                }
+                result.to_string()
+            } else { json!({"error":"not found"}).to_string() };
             respond(
                 &mut stream,
                 "200 OK",
@@ -536,12 +724,15 @@ fn handle(
                 body.as_bytes(),
             );
         }
-        "/api/comments" => {
-            // /api/comments?aid=123&q=关键词  （评论正文、昵称、楼中楼都会命中）
+        "/api/comments/search" => {
+            // /api/comments/search?aid=123&q=关键词  （评论正文、昵称、楼中楼都会命中）
             let aid: u64 = param("aid").and_then(|s| s.parse().ok()).unwrap_or(0);
             let q = param("q").unwrap_or_default().to_lowercase();
+            let projection = view.as_ref().map(|view| view.comments((aid != 0).then_some(aid)));
+            if reject_changed(&mut stream) { return; }
             let body = {
-                let d = doc.lock().unwrap();
+                let live = doc.lock().unwrap();
+                let d = projection.as_ref().unwrap_or(&live);
                 let mut out = Vec::new();
                 for v in d.videos.iter().filter(|v| aid == 0 || v.aid == aid) {
                     for c in &v.comments {
@@ -604,14 +795,35 @@ fn handle(
     }
 }
 
-fn offline_policy(ctype:&str)->&'static str {
-    if ctype.starts_with("text/html")&&crate::library::offline(){"Content-Security-Policy: img-src 'self' data: https://hdslb.com https://*.hdslb.com; media-src 'self' data: blob:; connect-src 'self'\r\n"}else{""}
+fn redirect_workspace(stream: &mut TcpStream, path: &str, query: &str) {
+    // Leave the fragment unspecified so the browser carries over the original anchor.
+    let location = if query.is_empty() {
+        path.to_owned()
+    } else {
+        let mut query_header = String::with_capacity(query.len());
+        for byte in query.bytes() {
+            if byte.is_ascii_graphic() {
+                query_header.push(char::from(byte));
+            } else {
+                use std::fmt::Write as _;
+                let _ = write!(query_header, "%{byte:02X}");
+            }
+        }
+        format!("{path}?{query_header}")
+    };
+    let _ = write!(stream, "HTTP/1.1 302 Found\r\nLocation: {location}\r\nCache-Control: no-store\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+}
+
+fn respond_html(stream: &mut TcpStream, head: bool, offline: bool) {
+    let policy = if offline {
+        "Content-Security-Policy: img-src 'self' data: https://hdslb.com https://*.hdslb.com; media-src 'self' data: blob:; connect-src 'self'\r\n"
+    } else { "" };
+    respond_private_with_policy(stream, "200 OK", "text/html; charset=utf-8", INDEX_HTML.as_bytes(), head, policy);
 }
 fn respond(stream: &mut TcpStream, status: &str, ctype: &str, body: &[u8]) {
-    let policy=offline_policy(ctype);
     let head = format!(
         "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n\
-         Access-Control-Allow-Origin: *\r\n{policy}Cache-Control: no-store\r\nConnection: close\r\n\r\n",
+         Access-Control-Allow-Origin: *\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
         status,
         ctype,
         body.len()
@@ -662,7 +874,10 @@ mod port_tests {
 
 // Account archives deliberately have no cross-origin read permission.
 fn respond_private(stream: &mut TcpStream, status: &str, ctype: &str, body: &[u8], head: bool) {
-    let policy=offline_policy(ctype);
+    respond_private_with_policy(stream, status, ctype, body, head, "");
+}
+
+fn respond_private_with_policy(stream: &mut TcpStream, status: &str, ctype: &str, body: &[u8], head: bool, policy: &str) {
     let header=format!("HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n{policy}Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",status,ctype,body.len());
     let _ = stream.write_all(header.as_bytes());
     if !head {
@@ -755,6 +970,32 @@ mod message_api_tests {
         assert!(request(port,"/api/account","","GET").contains("\"logged_in\":false"));
         stop.store(true, Ordering::Relaxed);
     }
+    #[test]
+    fn routes_use_workspace_paths_and_preserve_legacy_page_queries() {
+        let mut doc = ArchiveDoc::default();
+        doc.videos = vec![
+            crate::model::Video { aid: 7, title: "video".into(), r#type: "video".into(), ..Default::default() },
+            crate::model::Video { aid: 7, title: "article".into(), r#type: "article".into(), ..Default::default() },
+        ];
+        let stop = Arc::new(AtomicBool::new(false));
+        let port = spawn_with_stop(Arc::new(Mutex::new(doc)), 0, stop.clone()).unwrap();
+        for path in ["/comments", "/messages", "/api/comments/archive.json", "/api/comments/data.json", "/api/comments/posts", "/api/comments/search", "/api/messages/summary", "/api/account", "/health"] {
+            assert!(request(port, path, "", "GET").starts_with("HTTP/1.1 200"), "{path}");
+        }
+        for path in ["/api/archive.json", "/api/data.json?view=list", "/api/videos", "/api/video?aid=7", "/api/comments?q=test", "/api/comments/works", "/api/comments/work?aid=7", "/api/comments/items", "/api/comments/posts/7/8"] {
+            assert!(request(port, path, "", "GET").starts_with("HTTP/1.1 404"), "{path}");
+        }
+        for (from, to) in [("/", "/comments"), ("/index.html", "/comments"), ("/comments/", "/comments"), ("/messages/", "/messages")] {
+            let response = request(port, &format!("{from}?aid=7&q=%E8%AF%84"), "", "GET");
+            assert!(response.starts_with("HTTP/1.1 302"));
+            assert!(response.contains(&format!("Location: {to}?aid=7&q=%E8%AF%84\r\n")));
+        }
+        let detail = request(port, "/api/comments/posts/7?comment_type=12", "", "GET");
+        let payload: serde_json::Value = serde_json::from_str(detail.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(payload["title"], "article");
+        stop.store(true, Ordering::Relaxed);
+    }
+
     fn request(port: u16, path: &str, origin: &str, method: &str) -> String {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
         stream

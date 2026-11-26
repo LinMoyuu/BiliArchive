@@ -18,12 +18,15 @@
   if(key===avatarUrl)return;
   window.archiveImages?.reset(avatar);
   avatarUrl=key;avatar.hidden=true;fallback.hidden=false;avatar.removeAttribute('src');
-  avatar.onload=()=>{if(avatarUrl===key){avatar.hidden=false;fallback.hidden=true;}};
+  const photo=avatar.parentElement;
+  photo?.removeAttribute('data-image-state');
+  avatar.onload=()=>{if(avatarUrl===key){photo?.setAttribute('data-image-state','loaded');avatar.hidden=false;fallback.hidden=true;}};
   avatar.onerror=()=>{
    if(avatarUrl!==key||window.archiveImages?.retry(avatar,remote))return;
+   photo?.setAttribute('data-image-state','fallback');
    avatar.hidden=true;fallback.hidden=false;
   };
-  if(safe||remote)avatar.src=safe||remote;
+  if(safe||remote){photo?.setAttribute('data-image-state','loading');avatar.src=safe||remote;}
  }
  async function refresh(){
   const token=++request;

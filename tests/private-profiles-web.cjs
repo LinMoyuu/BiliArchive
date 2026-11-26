@@ -4,7 +4,7 @@ const typeButtons=['replies','mentions','likes','private'].map(type=>({dataset:{
 const nodes=new Map(),requests=[],pending=[],observers=[];let uid='12';
 class Node{constructor(){this.value='';this.dataset={};this.images=[];this.innerHTML='';this.textContent='';this.classList={add(){},remove(){}};}querySelectorAll(selector){return selector==='[data-profile-uid]'?this.images:selector==='[data-profile-missing]'?this.images.filter(i=>i.dataset.profileMissing):[];}insertAdjacentHTML(){}replaceChildren(){}}
 const node=id=>{if(!nodes.has(id))nodes.set(id,new Node());return nodes.get(id)};
-class Observer{constructor(fn){this.fn=fn;this.targets=new Set();observers.push(this)}observe(el){this.targets.add(el)}unobserve(el){this.targets.delete(el)}disconnect(){this.targets.clear()}show(el){this.fn([{target:el,isIntersecting:true}])}}
+class Observer{constructor(fn,options){this.options=options;this.fn=fn;this.targets=new Set();observers.push(this)}observe(el){this.targets.add(el)}unobserve(el){this.targets.delete(el)}disconnect(){this.targets.clear()}show(el){this.fn([{target:el,isIntersecting:true}])}}
 function image(uid){return{dataset:{profileUid:uid,profileMissing:'true'},src:'/assets/noface.jpg',getAttribute(k){return this[k]},setAttribute(k,v){this[k]=v}}}
 const ctx=vm.createContext({URL,URLSearchParams,setTimeout,clearTimeout,IntersectionObserver:Observer,location:{href:'http://localhost/messages'},document:{getElementById:node,createElement:()=>new Node(),querySelectorAll:s=>s==='#types button'?typeButtons:[]},fetch:async url=>{
  requests.push(url);if(url.includes('/profile?'))return new Promise(resolve=>pending.push({url,resolve}));
@@ -14,8 +14,10 @@ function complete(task,options={}){const u=new URL(task.url,'http://local').sear
 (async()=>{
  await run('ready');run("state.type='private';state.uid='12'");
  const a=image('2'),b=image('2'),c=image('3'),d=image('4');node('sessions').images=[a,c,d];node('items').images=[b];
- run("hydrateProfileAvatars($('sessions'));hydrateProfileAvatars($('items'))");const observer=observers.at(-1);assert(observer.targets.has(a));assert.equal(pending.length,0,'off-screen avatars do not request');
- observer.show(a);observer.show(b);observer.show(c);observer.show(d);assert.equal(pending.length,2,'at most two requests and duplicate UID shares one');
+ run("hydrateProfileAvatars($('sessions'));hydrateProfileAvatars($('items'))");const sessionObserver=observers.find(o=>o.options?.root===node('session-pane'));
+ const messageObserver=observers.find(o=>o.options?.root===node('conversation-pane'));
+ assert(sessionObserver.targets.has(a));assert(messageObserver.targets.has(b));assert.equal(pending.length,0,'off-screen avatars do not request');
+ sessionObserver.show(a);messageObserver.show(b);sessionObserver.show(c);sessionObserver.show(d);assert.equal(pending.length,2,'at most two requests and duplicate UID shares one');
  complete(pending[0]);await flush();assert.equal(a.src,'https://i0.hdslb.com/real.jpg');assert.equal(b.src,a.src);assert(!a.dataset.profileMissing);assert.equal(pending.length,3,'queued user starts after slot releases');
  complete(pending[1],{ok:false});complete(pending[2]);await flush();const count=requests.length;run("queueProfile('3')");assert.equal(requests.length,count,'failure does not spin');
  run('resetProfiles(true)');run("hydrateProfileAvatars($('sessions'))");observers.at(-1).show(c);assert(new URL(pending.at(-1).url,'http://local').searchParams.get('retry')==='1');complete(pending.at(-1));await flush();assert.equal(c.src,a.src);

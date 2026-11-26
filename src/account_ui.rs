@@ -10,7 +10,7 @@ use std::{
 };
 
 /// Only public identity is shared with the local web server; never credentials.
-#[derive(Clone, Default, serde::Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PublicAccount {
     pub logged_in: bool,
     pub mode: String,

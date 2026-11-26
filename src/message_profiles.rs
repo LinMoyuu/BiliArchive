@@ -103,6 +103,11 @@ pub fn local_profiles(doc: &Doc) -> BTreeMap<String, Profile> {
             entry.avatar_url = avatar(&item.raw);
         }
     }
+    reuse_profiles(doc, &mut profiles);
+    profiles
+}
+
+pub(crate) fn reuse_profiles(doc: &Doc, profiles: &mut BTreeMap<String, Profile>) {
     // Only enrich users already associated with a private session/message.
     // Other categories are donors, not permission to query arbitrary people.
     for item in &doc.items {
@@ -110,13 +115,13 @@ pub fn local_profiles(doc: &Doc) -> BTreeMap<String, Profile> {
         if raw["user"].is_object() {
             let user = &raw["user"];
             let key = user_id(user).unwrap_or_else(|| item.sender_uid.clone());
-            reuse_user(&mut profiles, &key, user);
+            reuse_user(profiles, &key, user);
         }
         for users in [&raw["users"], &raw["item"]["at_details"]] {
             if let Some(users) = users.as_array() {
                 for user in users {
                     if let Some(key) = user_id(user) {
-                        reuse_user(&mut profiles, &key, user);
+                        reuse_user(profiles, &key, user);
                     }
                 }
             }
@@ -133,7 +138,6 @@ pub fn local_profiles(doc: &Doc) -> BTreeMap<String, Profile> {
         }
     }
     if let Some(users)=doc.archive["users"].as_object(){for(key,user)in users{if let Some(profile)=profiles.get_mut(key){if profile.name.is_empty(){profile.name=user["name"].as_str().unwrap_or_default().into();}if profile.avatar_url.is_empty(){profile.avatar_url=user["avatar_resource_id"].as_str().and_then(|id|doc.archive["resources"][id]["url"].as_str()).map(avatar_url).unwrap_or_default();}}}}
-    profiles
 }
 fn user_id(user: &Value) -> Option<String> {
     [&user["mid"], &user["uid"]]

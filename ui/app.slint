@@ -108,8 +108,8 @@ component HubScrollView inherits Rectangle {
         vertical-scrollbar-policy: always-off; horizontal-scrollbar-policy: always-off;
         @children
     }
-    HubScrollBar { x: parent.width - 10px; width: 10px; height: view.height; extent: root.content-height; page: view.height; offset <=> root.content-y; }
-    HubScrollBar { y: parent.height - 10px; height: 10px; width: view.width; horizontal: true; extent: root.content-width; page: view.width; offset <=> root.content-x; }
+    HubScrollBar { x: parent.width - 10px; y: 6px; width: 10px; height: max(0px, view.height - 12px); extent: root.content-height; page: view.height; offset <=> root.content-y; }
+    HubScrollBar { x: 6px; y: parent.height - 10px; height: 10px; width: max(0px, view.width - 12px); horizontal: true; extent: root.content-width; page: view.width; offset <=> root.content-x; }
 }
 
 
@@ -239,7 +239,7 @@ component HubYearBox inherits Btn {
             init => { self.highlight(root.value); }
             function highlight(value: int) {
                 self.highlighted = min(9999, max(1970, value));
-                list.viewport-y = -min((8030 * 28px) - list.height, max(0px, (self.highlighted - 1970) * 28px - 84px));
+                list.content-y = -min((8030 * 28px) - list.height, max(0px, (self.highlighted - 1970) * 28px - 84px));
             }
             key-pressed(event) => {
                 if event.text == Key.Escape { years.close(); return accept; }
@@ -965,6 +965,7 @@ export component AppWindow inherits Window {
     callback preview-status-clicked();
     callback range-all(int);
     callback range-edited(int);
+    in-out property <bool> archive-precache: true;
     in-out property <bool> resource-avatars: false;
     in-out property <bool> resource-covers: false;
     in-out property <bool> resource-content-images: false;
@@ -986,8 +987,9 @@ export component AppWindow inherits Window {
             drop-shadow-color: #0F172A0A;
             drop-shadow-offset-y: 1px;
 
-            // 外层只管垂直居中（主轴 = 垂直），内层负责水平分布：LOGO 贴左、按钮贴右
+            // 显式填满顶栏，使窗口宽度独立于账号文字的首选宽度。
             VerticalLayout {
+                x: 0px; y: 0px; width: parent.width; height: parent.height;
                 alignment: center;
                 HorizontalLayout {
                     padding-left: 20px;
@@ -1204,7 +1206,7 @@ export component AppWindow inherits Window {
                             Rectangle {
                                 width: parent.width; height: parent.height;
                                 hub-list-0 := ListView {
-                                    width: parent.width - 10px; height: parent.height;
+                                    width: parent.width - 14px; height: parent.height;
                                     vertical-scrollbar-policy: always-off; horizontal-scrollbar-policy: always-off;
                                     for row[i] in root.videos : Rectangle {
                                         height: 56px;
@@ -1257,7 +1259,7 @@ export component AppWindow inherits Window {
                                         }
                                     }
                                 }
-                                HubScrollBar { x: parent.width - 10px; width: 10px; height: parent.height; extent: hub-list-0.content-height; page: hub-list-0.visible-height; offset <=> hub-list-0.content-y; }
+                                HubScrollBar { x: parent.width - 14px; y: 7px; width: 10px; height: max(0px, parent.height - 14px); extent: hub-list-0.content-height; page: hub-list-0.visible-height; offset <=> hub-list-0.content-y; }
                             }
                         }
 
@@ -1509,7 +1511,7 @@ export component AppWindow inherits Window {
                             spacing: 8px;
                             Text { min-width: 0px; overflow: elide; text: "消息与附件自动归档"; color: Theme.muted; font-size: Theme.font-body; horizontal-stretch: 1; vertical-alignment: center; }
 
-                            Btn { text: "重试 NG（" + root.message-ng-count + "）"; width: 110px; enabled: !root.busy && root.account-logged-in && root.message-ng-count > 0; clicked => {root.message-retry-ng();} }
+                            Btn { text: "重试NG项（" + root.message-ng-count + "）"; width: 110px; enabled: !root.busy && root.account-logged-in && root.message-ng-count > 0; clicked => {root.message-retry-ng();} }
                             Btn { text: "处理附件"; width: 78px; enabled: !root.busy && root.message-attachments-pending > 0; clicked => {root.message-attachments();} }
                             Btn { text: "导出 JSON"; width: 92px; primary: true; enabled: !root.busy; clicked => {root.message-export();} }
                         }
@@ -1785,6 +1787,14 @@ export component AppWindow inherits Window {
                                         }
                                     }
 
+                                    Rectangle { height: 1px; background: #F1F3F8; }
+                                    HorizontalLayout {
+                                        height: 28px;
+                                        spacing: 12px;
+                                        Text { text: "归档预缓存"; color: Theme.text; font-size: Theme.font-section; font-weight: 600; vertical-alignment: center; horizontal-stretch: 1; }
+                                        Toggle { checked <=> root.archive-precache; enabled: !root.busy; }
+                                    }
+                                    Text { text: "开启时预读归档。关闭时桌面和网页预览按需读取磁盘，以减少内存占用。"; color: Theme.faint; font-size: Theme.font-hint; wrap: word-wrap; }
                                     Rectangle { height: 1px; background: #F1F3F8; }
                                     Text { text: "离线资源"; color: Theme.text; font-size: Theme.font-section; font-weight: 600; }
                                     Text { text: "私信图片始终保存；其他消息附件同样始终启用（包含已采集粉丝团）。头像、封面和评论配图默认只保留链接"; color: Theme.faint; font-size: Theme.font-hint; wrap: word-wrap; }

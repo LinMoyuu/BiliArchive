@@ -8,12 +8,20 @@ const requests=[];let account='12';let fail=false;
 const ctx=vm.createContext({console,URL,URLSearchParams,location:{href:'http://127.0.0.1:9000/messages'},setTimeout,clearTimeout,document:{createElement(){return node('element-'+Math.random())},getElementById:node,querySelectorAll(selector){return selector==='#types button'?buttons:[]}},fetch:async url=>{
 requests.push(url);if(fail)return{ok:false,status:500};
 if(url.includes('/api/messages/likes?'))return{ok:true,json:async()=>({account_uid:account,notice:'通知报告 100 个赞 / 已归档 51 位用户 · 接口已遍历；明细数与通知计数不一致',total:51,items:[{uid:'18446744073709551614',nickname:'<script>like user</script>',like_time:100,raw:{}}]})};
-return{ok:true,json:async()=>url.includes('/summary')?{account_uid:account,counts:{private:1,groups:2,likes:0,replies:0,mentions:0},sessions:[{key:'user_2',name:'someone',timestamp:100,session_type:1,talker_id:'2'},{key:'group_3',name:'fan group',timestamp:101,session_type:2,talker_id:'3'}],attachments_saved:1,attachments_pending:0}:{account_uid:account,total:1,items:[fixture]}};
+return{ok:true,json:async()=>url.includes('/summary')?{account_uid:account,counts:{private:1,groups:2,likes:0,replies:0,mentions:0},sessions:[{key:'user_2',name:'someone',timestamp:100,session_type:1,talker_id:'2'},{key:'group_3',name:'fan group',timestamp:101,session_type:2,talker_id:'3'}],attachments_saved:283,attachments_pending:0,attachments_by_type:{replies:{saved:2,pending:1},mentions:{saved:0,pending:0},likes:{saved:0,pending:1},private:{saved:4,pending:3}}}:{account_uid:account,total:1,items:[fixture]}};
 }});
 vm.runInContext(script,ctx);
 (async()=>{
  await vm.runInContext('ready',ctx);
+ assert.equal(node('status').textContent,'附件 2 已保存 / 1 待处理');
+ await buttons.find(b=>b.dataset.type==='mentions').onclick();
+ assert.equal(node('status').hidden,true);
+ assert.equal(node('status').textContent,'');
+ await buttons.find(b=>b.dataset.type==='private').onclick();
+ assert.equal(node('status').textContent,'附件 4 已保存 / 3 待处理');
  await buttons.find(b=>b.dataset.type==='likes').onclick();
+ assert.equal(node('status').textContent,'附件 0 已保存 / 1 待处理');
+ assert.equal(node('status').hidden,false);
  assert.equal(node('order').value,'new');
  for(const text of ['时间倒序','时间正序','点赞最多','点赞最少'])assert(node('order').innerHTML.includes(text));
  const last=()=>new URL(requests.filter(u=>u.includes('/api/messages/items?')).at(-1),'http://local');

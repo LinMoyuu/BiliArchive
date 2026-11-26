@@ -435,6 +435,7 @@ impl Envelope {
     }
 }
 struct Resources {
+    verify_checksums: bool,
     root: PathBuf,
     account: String,
     policy: ResourcePolicy,
@@ -444,6 +445,7 @@ struct Resources {
 impl Resources {
     fn new(root: &Path, account: u64, policy: ResourcePolicy) -> Self {
         Self {
+            verify_checksums: true,
             root: root.into(),
             account: if account == 0 {
                 "public".into()
@@ -507,7 +509,7 @@ impl Resources {
             {
                 entry["size"] = json!(m.len());
             }
-            if entry["checksum"].as_str().unwrap_or_default().is_empty() {
+            if self.verify_checksums && entry["checksum"].as_str().unwrap_or_default().is_empty() {
                 match file_hash(&self.root.join(entry["path"].as_str().unwrap_or_default())) {
                     Ok(sum) => entry["checksum"] = json!(sum),
                     Err(error) => {
@@ -1332,21 +1334,6 @@ impl ResourceCopies {
         Ok(())
     }
 }
-pub fn local_resource(root: &Path, account: &str, id: &str) -> Option<PathBuf> {
-    if id.len() != 32
-        || !id.bytes().all(|b| b.is_ascii_hexdigit())
-        || account.is_empty()
-        || (account != "public" && !account.bytes().all(|b| b.is_ascii_digit()))
-    {
-        return None;
-    }
-    let base = root.join("resources").join(account);
-    std::fs::read_dir(base)
-        .ok()?
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .find(|p| p.file_stem().is_some_and(|s| s == id) && p.is_file())
-}
-
 /// Resolve only files under the declared root, including when existing directories are symlinks.
 pub fn resource_file(base: &Path, relative: &str) -> Option<PathBuf> {
     if !safe_path(relative) || !relative.starts_with("resources/") {
@@ -1356,74 +1343,34 @@ pub fn resource_file(base: &Path, relative: &str) -> Option<PathBuf> {
     let file = base.join(relative).canonicalize().ok()?;
     (file.starts_with(canonical) && file.is_file()).then_some(file)
 }
-/// Map URLs in a view DTO to saved assets, retaining original URLs for navigation.
-pub fn localize_view(value: &mut Value, root: &Path, account: &str) {
-    match value {
-        Value::Object(map) => {
-            let mut sources = serde_json::Map::new();
-            for (key, v) in map.iter_mut() {
-                if [
-                    "avatar",
-                    "avatar_url",
-                    "face",
-                    "cover",
-                    "cover_src",
-                    "image",
-                    "src",
-                    "img_src",
-                    "voice_url",
-                    "audio_url",
-                    "file_url",
-                ]
-                .contains(&key.as_str())
-                {
-                    if let Some(source) = v.as_str() {
-                        let normalized = url(source);
-                        if !normalized.is_empty() {
-                            if local_resource(root, account, &hash(&normalized)).is_some() {
-                                sources.insert(key.clone(), json!(source));
-                                *v = json!(format!("/api/archive-resources/{}", hash(&normalized)));
-                            }
-                        }
-                    }
-                }
-                if key != "raw" {
-                    localize_view(v, root, account);
-                }
-            }
-            if !sources.is_empty() {
-                map.insert("_original_resources".into(), Value::Object(sources));
-            }
-        }
-        Value::Array(values) => {
-            for v in values {
-                localize_view(v, root, account)
-            }
-        }
-        _ => (),
-    }
-}
-
-pub fn resource_images(resources: &BTreeMap<String, Value>) -> Value {
-    let mut urls = serde_json::Map::new();
-    for (key, res) in resources {
-        if res["status"] == "saved" {
-            if let Some(source) = res["url"].as_str() {
-                urls.insert(
-                    source.into(),
-                    json!(format!("/api/archive-resources/{key}")),
-                );
-            }
-        }
-    }
-    Value::Object(urls)
-}
 pub fn message_resources(
     input: &crate::messages::Doc,
     root: &Path,
     policy: ResourcePolicy,
 ) -> BTreeMap<String, Value> {
     let mut b = Resources::new(root, input.account_uid.parse().unwrap_or(0), policy);
+    collect_message_resources(&mut b, input);
+    b.entries
+}
+
+/// Aggregate preview resource status without hashing media or reopening the index per session.
+pub(crate) struct MessageResourceScan(Resources);
+
+impl MessageResourceScan {
+    pub fn new(root: &Path, uid: u64) -> Self {
+        let mut resources = Resources::new(root, uid, ResourcePolicy::load());
+        resources.verify_checksums = false;
+        Self(resources)
+    }
+
+    pub fn add(&mut self, doc: &crate::messages::Doc) {
+        collect_message_resources(&mut self.0, doc);
+    }
+
+    pub fn finish(self) -> BTreeMap<String, Value> { self.0.entries }
+}
+
+fn collect_message_resources(b: &mut Resources, input: &crate::messages::Doc) {
     if let Some(saved) = input.archive["resources"].as_object() {
         for (key, value) in saved {
             b.catalog.insert(key.clone(), value.clone());
@@ -1460,7 +1407,6 @@ pub fn message_resources(
     for subject in crate::message_subjects::index(input).values() {
         b.add("cover", &subject.cover, None);
     }
-    b.entries
 }
 pub fn message_resource_counts(input: &crate::messages::Doc) -> (usize, usize) {
     let values = message_resources(input, &configured_root(), ResourcePolicy::load());
@@ -1656,6 +1602,7 @@ pub fn comment_root(doc: &crate::model::ArchiveDoc) -> PathBuf {
 pub fn comment_account(doc: &crate::model::ArchiveDoc) -> u64 {
     doc.archive["meta"]["account_uid"]
         .as_str()
+        .or_else(|| doc.archive["account_uid"].as_str())
         .and_then(|s| s.parse().ok())
         .unwrap_or_else(account)
 }

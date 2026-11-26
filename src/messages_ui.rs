@@ -109,6 +109,30 @@ pub fn refresh(shared: &Arc<Shared>, ui: &Weak<AppWindow>) {
     let has_resume = current && messages::has_resumable_task(uid, &state).unwrap_or(false);
     let snapshot_root = state.root.clone();
     drop(state);
+    publish_stats(shared, ui, uid, snapshot_root, values, saved, pending, ng, has_resume);
+}
+
+pub fn load_overview(shared: &Arc<Shared>, ui: &Weak<AppWindow>, uid: u64) {
+    let root = PathBuf::from(export_dir_of(&shared.cfg.lock().unwrap()));
+    let (summary, has_resume) = crate::preview_disk::desktop_message_view(&root, uid);
+    let root = messages::base(&root, uid);
+    if !snapshot_is_current(shared, uid, &root) { return; }
+    let values = ["replies", "mentions", "likes", "private", "groups"]
+        .map(|ty| summary["counts"][ty].as_u64().unwrap_or(0).to_string());
+    let saved = summary["attachments_saved"].as_u64().unwrap_or(0) as usize;
+    let pending = summary["attachments_pending"].as_u64().unwrap_or(0) as usize;
+    let ng = messages::ng_count(uid, &root.to_string_lossy()).unwrap_or(0);
+    *shared.messages.lock().unwrap() = messages::Store {
+        doc: messages::Doc::new(uid),
+        root: root.clone(),
+        notice: String::new(),
+    };
+    publish_stats(shared, ui, uid, root, values, saved, pending, ng, has_resume);
+}
+
+fn publish_stats(shared: &Arc<Shared>, ui: &Weak<AppWindow>, uid: u64, snapshot_root: PathBuf,
+    values: [String; 5], saved: usize, pending: usize, ng: usize, has_resume: bool,
+) {
     let account = shared.clone();
     emit(ui, move |w| {
         if !snapshot_is_current(&account, uid, &snapshot_root) {
@@ -152,6 +176,11 @@ pub fn run(action: Action, shared: &Arc<Shared>, ui: &Weak<AppWindow>) {
             ui,
             "离线账号仅可读取本地内容和处理公开附件，分页 NG 需在线验证原账号".into(),
         );
+        return;
+    }
+    if matches!(&action, Action::Load(_)) {
+        let _reading = LocalReadGuard::messages(shared, ui);
+        load_overview(shared, ui, uid);
         return;
     }
     let retry_ng = matches!(&action, Action::RetryNg(_));
@@ -323,7 +352,7 @@ pub fn run(action: Action, shared: &Arc<Shared>, ui: &Weak<AppWindow>) {
                         .errors
                         .len()
                         .saturating_sub(usize::from(outcome.paging_unresolved > 0));
-                    format!("消息采集部分完成 · 补试恢复 {} 项 · 新增 NG {} 项 · 跳过已有 NG {} 项 · 未解决分页 {} 项 · 其他异常 {} 项；NG 可使用「重试 NG」补采",outcome.paging.recovered,outcome.paging.ng,outcome.paging.skipped_ng,outcome.paging_unresolved,other)
+                    format!("消息采集部分完成 · 补试恢复 {} 项 · 新增 NG {} 项 · 跳过已有 NG {} 项 · 未解决分页 {} 项 · 其他异常 {} 项；NG 可使用「重试NG项」补采",outcome.paging.recovered,outcome.paging.ng,outcome.paging.skipped_ng,outcome.paging_unresolved,other)
                 };
                 let complete = !shared.cancel.load(Ordering::SeqCst) && outcome.errors.is_empty();
                 task_state(shared, ui, final_text, if complete { 1.0 } else { 0.0 });

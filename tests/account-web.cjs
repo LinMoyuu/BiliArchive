@@ -6,7 +6,7 @@ let document;function node(id){if(!nodes.has(id))nodes.set(id,{id,hidden:['accou
 document={hidden:false,getElementById:node,addEventListener(type,fn){listeners['doc:'+type]=fn}};
 const window={addEventListener(type,fn){listeners[type]=fn},dispatchEvent(e){events.push(e)},setInterval(fn,ms){timer=fn;interval=ms}};
 const response=value=>({ok:true,json:async()=>value});
-const ctx=vm.createContext({window,document,URL,location:{href:"http://localhost/messages",origin:"http://localhost"},CustomEvent:class{constructor(type,init){this.type=type;this.detail=init.detail}},fetch:async(url,options)=>{requests.push([url,options]);if(deferred)return new Promise(resolve=>pending.push(resolve));return failed?{ok:false}:response({...data})}});
+const ctx=vm.createContext({window,document,URL,setTimeout,clearTimeout,location:{href:"http://localhost/messages",origin:"http://localhost"},CustomEvent:class{constructor(type,init){this.type=type;this.detail=init.detail}},fetch:async(url,options)=>{requests.push([url,options]);if(deferred)return new Promise(resolve=>pending.push(resolve));return failed?{ok:false}:response({...data})}});
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../web/archive-images.js'),'utf8'),ctx);
 vm.runInContext(source,ctx);const flush=()=>new Promise(r=>setImmediate(r));
 (async()=>{

@@ -13,7 +13,7 @@ use std::{
 
 #[path = "messages_paging.rs"]
 mod paging;
-pub use paging::{ng_count, PagingStats};
+pub use paging::ng_count;
 #[path = "messages_likes.rs"]
 mod likes;
 #[path = "messages_run.rs"]
@@ -360,17 +360,79 @@ pub fn attachment_file(store: &Store, attachment_id: &str) -> Option<PathBuf> {
         .iter()
         .flat_map(|i| i.attachments.iter())
         .find(|a| a.id == attachment_id && !a.path.is_empty())?;
-    if !safe_relative(&a.path) {
+    let root = crate::archive::storage_root(&store.root).canonicalize().ok()?;
+    local_attachment_path(&root, &store.doc.account_uid, &a.path)
+}
+
+fn local_attachment_path(root: &Path, uid: &str, relative: &str) -> Option<PathBuf> {
+    if !safe_relative(relative) {
         return None;
     }
-    let root = crate::archive::storage_root(&store.root)
-        .canonicalize()
-        .ok()?;
-    let p = root.join(&a.path).canonicalize().ok()?;
-    ((p.starts_with(root.join("resources").join(&store.doc.account_uid))
-        || p.starts_with(root.join("attachments")))
-        && p.is_file())
-    .then_some(p)
+    let path = root.join(relative).canonicalize().ok()?;
+    (path.starts_with(root.join("resources").join(uid)) || path.starts_with(root.join("attachments")))
+        .then_some(path)
+        .filter(|path| path.is_file())
+}
+
+/// Keep lightweight attachment references so cached summaries can check the files again.
+#[derive(Default)]
+pub(crate) struct AttachmentInventory {
+    by_type: BTreeMap<&'static str, BTreeSet<String>>,
+    paths: BTreeMap<String, BTreeSet<String>>,
+}
+
+impl AttachmentInventory {
+    pub fn add(&mut self, doc: &Doc) {
+        for item in &doc.items {
+            let ty = match item_type(item) {
+                "private" | "groups" => "private",
+                "replies" => "replies",
+                "mentions" => "mentions",
+                "likes" => "likes",
+                _ => continue,
+            };
+            for attachment in &item.attachments {
+                if attachment.id.is_empty() || crate::archive::attachment_type(item, attachment) == "cover" {
+                    continue;
+                }
+                self.by_type.entry(ty).or_default().insert(attachment.id.clone());
+                let paths = self.paths.entry(attachment.id.clone()).or_default();
+                if !attachment.path.is_empty() {
+                    paths.insert(attachment.path.clone());
+                }
+                if let Some(path) = doc.archive["resources"][&attachment.id]["path"].as_str().filter(|p| !p.is_empty()) {
+                    paths.insert(path.to_owned());
+                }
+            }
+        }
+    }
+
+    pub fn cache_bytes(&self) -> usize {
+        let identifiers: usize = self.by_type.values().flatten().map(|id| id.len() + 64).sum();
+        let files: usize = self.paths.iter().map(|(id, paths)| {
+            id.len() + 64 + paths.iter().map(|path| path.len() + 64).sum::<usize>()
+        }).sum();
+        identifiers + files
+    }
+
+    pub fn counts(&self, root: &Path, uid: &str) -> Value {
+        let root = root.canonicalize().ok();
+        let saved: BTreeSet<_> = self.paths.iter().filter(|(_, paths)| {
+            root.as_ref().is_some_and(|root| paths.iter().any(|relative| {
+                local_attachment_path(root, uid, relative).is_some_and(|path| {
+                    std::fs::metadata(path).is_ok_and(|meta| meta.len() > 0)
+                })
+            }))
+        }).map(|(id, _)| id.as_str()).collect();
+        let mut totals = serde_json::Map::new();
+        for ty in ["replies", "mentions", "likes", "private"] {
+            let ids = self.by_type.get(ty);
+            let count = ids.map_or(0, BTreeSet::len);
+            let saved = ids.into_iter().flatten().filter(|id| saved.contains(id.as_str())).count();
+            totals.insert(ty.into(), json!({"saved": saved, "pending": count - saved}));
+        }
+        Value::Object(totals)
+    }
 }
 pub fn load(root: &Path, uid: u64) -> Result<Store> {
     load_with_workers(root, uid, crate::local_read::workers())
@@ -1195,7 +1257,7 @@ fn crawl_run(
     let paging = ctx.paging.as_ref().unwrap();
     if paging.unresolved() > 0 {
         errors.push(format!(
-            "分页异常尚未完成 {} 项；NG 可使用「重试 NG」补采",
+            "分页异常尚未完成 {} 项；NG 可使用「重试NG项」补采",
             paging.unresolved()
         ));
     }
@@ -1603,7 +1665,7 @@ fn crawl_pass(
 }
 
 /// File counts use attachment IDs rather than message references.
-fn session_summaries(doc: &Doc) -> Vec<Value> {
+pub(crate) fn session_summaries(doc: &Doc) -> Vec<Value> {
     let mut last: BTreeMap<&str, &Item> = BTreeMap::new();
     for item in doc.items.iter().filter(|i| i.ty == "private") {
         if last
@@ -2369,6 +2431,41 @@ mod checkpoint_directory_tests {
 #[cfg(test)]
 mod attachment_processing_tests {
     use super::*;
+
+    #[test]
+    fn attachment_inventory_groups_and_rechecks_local_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("attachments")).unwrap();
+        let file = root.join("attachments/ok.png");
+        std::fs::write(&file, b"image").unwrap();
+        let ok = Attachment {
+            id: "ok".into(), url: "https://example.test/ok.png".into(),
+            path: "attachments/ok.png".into(), ..Default::default()
+        };
+        let missing = Attachment {
+            id: "missing".into(), url: "https://example.test/missing.mp3".into(),
+            path: "attachments/missing.mp3".into(), ..Default::default()
+        };
+        let cover = Attachment {
+            id: "cover".into(), url: "https://example.test/cover.jpg".into(), ..Default::default()
+        };
+        let mut doc = Doc::new(12);
+        doc.items = vec![
+            Item { ty: "private".into(), session: "user_2".into(), attachments: vec![ok.clone()], ..Default::default() },
+            Item { ty: "private".into(), session: "group_3".into(), attachments: vec![ok.clone(), missing], ..Default::default() },
+            Item { ty: "replies".into(), raw: json!({"item":{"image":cover.url}}), attachments: vec![ok, cover], ..Default::default() },
+        ];
+        let mut inventory = AttachmentInventory::default();
+        inventory.add(&doc);
+        let counts = inventory.counts(root, "12");
+        assert_eq!(counts["private"], json!({"saved":1,"pending":1}));
+        assert_eq!(counts["replies"], json!({"saved":1,"pending":0}));
+        assert_eq!(counts["likes"], json!({"saved":0,"pending":0}));
+        std::fs::remove_file(file).unwrap();
+        assert_eq!(inventory.counts(root, "12")["private"], json!({"saved":0,"pending":2}));
+    }
+
     fn state(root: &Path) -> Arc<Mutex<Store>> {
         let a = Attachment {
             id: digest("https://example.test/a.jpg"),

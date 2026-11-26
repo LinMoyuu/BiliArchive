@@ -22,6 +22,9 @@ mod message_dates;
 mod qrlogin;
 mod secure;
 mod web;
+mod web_images;
+mod preview_disk;
+mod preview_process;
 
 use anyhow::{Context, Result};
 use model::{human_count, ts_text, ArchiveDoc, Video};
@@ -65,6 +68,7 @@ struct Cfg {
     /// 默认导出目录；留空使用应用配置目录下的 exports
     export_dir: String,
     resource_policy: archive::ResourcePolicy,
+    archive_precache: bool,
 }
 
 impl Default for Cfg {
@@ -85,6 +89,7 @@ impl Default for Cfg {
             web_port: 8686,
             export_dir: String::new(),
             resource_policy: archive::ResourcePolicy::default(),
+            archive_precache: true,
         }
     }
 }
@@ -112,6 +117,9 @@ impl Cfg {
                                 "无法读取登录信息，请解锁系统凭据库或重新登录；原凭证已保留",
                             );
                         }
+                    }
+                    if let Some(b) = v["archive_precache"].as_bool() {
+                        cfg.archive_precache = b;
                     }
                     if let Some(b) = v["include_replies"].as_bool() {
                         cfg.include_replies = b;
@@ -176,6 +184,7 @@ impl Cfg {
             "web_port": self.web_port,
             "export_dir": self.export_dir,
             "resource_policy": self.resource_policy,
+            "archive_precache": self.archive_precache,
         });
         let secrets = secure::Secrets {
             sessdata: self.sessdata.clone(),
@@ -309,6 +318,7 @@ fn make_client(shared: &Arc<Shared>) -> Result<bili::Bili> {
 
 // ---------------- 后台命令 ----------------
 enum Cmd {
+    ArchiveModeChanged,
     Offline(offline::Action),
     EnsureMessageView {uid:u64},
     Messages(messages_ui::Action),
@@ -616,7 +626,7 @@ fn open_path(path: &str) {
 /// 网页服务的运行状态：地址用于重复打开浏览器，stop 用于主动停止并释放端口
 struct WebHandle {
     url: String,
-    stop: Arc<AtomicBool>,
+    process: preview_process::Process,
 }
 
 fn web_running(ui: &Weak<AppWindow>, running: bool) {
@@ -624,13 +634,13 @@ fn web_running(ui: &Weak<AppWindow>, running: bool) {
 }
 
 fn preview_url(base: &str, workspace: i32) -> String {
-    format!("{}/{}", base.trim_end_matches('/'), if workspace == 1 { "messages" } else { "" })
+    format!("{}/{}", base.trim_end_matches('/'), if workspace == 1 { "messages" } else { "comments" })
 }
 
 #[cfg(test)]
 mod preview_route_tests {
     #[test] fn current_workspace_determines_preview_path() {
-        assert_eq!(super::preview_url("http://127.0.0.1:8686/",0),"http://127.0.0.1:8686/");
+        assert_eq!(super::preview_url("http://127.0.0.1:8686/",0),"http://127.0.0.1:8686/comments");
         assert_eq!(super::preview_url("http://127.0.0.1:8686/",1),"http://127.0.0.1:8686/messages");
         assert_eq!(super::preview_url("http://127.0.0.1:9000",1),"http://127.0.0.1:9000/messages");
     }
@@ -645,35 +655,38 @@ fn ensure_web(
     open_browser: bool,
 ) {
     let workspace = ui.upgrade().map(|w| w.get_workspace()).unwrap_or(0);
-    if let Some(url) = cache.lock().unwrap().as_ref().map(|h| h.url.clone()) {
+    let existing = {
+        let mut slot = cache.lock().unwrap();
+        if slot.as_ref().is_some_and(|h| !h.process.running()) { slot.take(); }
+        slot.as_ref().map(|h| h.url.clone())
+    };
+    if let Some(url) = existing {
         if open_browser {
             let _ = webbrowser::open(&preview_url(&url, workspace));
         }
         return;
     }
-    let doc = shared.doc.clone();
-    let stop = Arc::new(AtomicBool::new(false));
-    let weak_shared = Arc::downgrade(shared);
-    let credentials: message_subjects::Credentials = Arc::new(move |uid| {
-        let shared = weak_shared.upgrade()?;
-        let cfg = shared.cfg.lock().unwrap();
-        if shared.offline.load(Ordering::SeqCst) || shared.account_uid.load(Ordering::SeqCst).to_string() != uid || cfg.sessdata.is_empty() { return None; }
-        Some(cfg.sessdata.clone())
-    });
-    let weak_shared = Arc::downgrade(shared);
-    let pacing: message_profiles::Pacing = Arc::new(move || {
-        weak_shared.upgrade().map(|shared| {
-            let cfg = shared.cfg.lock().unwrap();
-            (cfg.interval_ms.max(0) as u64, cfg.interval_max_ms.max(0) as u64)
-        }).unwrap_or((1800, 2400))
-    });
-    match web::spawn_with_profile_pacing(doc, shared.messages.clone(), shared.public_account.clone(), port, stop.clone(), credentials, pacing) {
-        Ok(port) => {
+    let exited_shared = Arc::downgrade(shared);
+    let exited_cache = Arc::downgrade(cache);
+    let exited_ui = ui.clone();
+    match preview_process::Process::start(shared, port, move || {
+        let _ = slint::invoke_from_event_loop(move || {
+            if let (Some(cache), Some(shared)) = (exited_cache.upgrade(), exited_shared.upgrade()) {
+                let mut slot = cache.lock().unwrap();
+                if slot.as_ref().is_some_and(|h| !h.process.running()) {
+                    slot.take();
+                    drop(slot);
+                    let message = "网页预览进程意外退出";
+                    push_log(&shared, &exited_ui, message);
+                    set_foot(&exited_ui, message.into());
+                    web_running(&exited_ui, false);
+                }
+            }
+        });
+    }) {
+        Ok((port, process)) => {
             let url = format!("http://127.0.0.1:{}/", port);
-            *cache.lock().unwrap() = Some(WebHandle {
-                url: url.clone(),
-                stop,
-            });
+            *cache.lock().unwrap() = Some(WebHandle { url: url.clone(), process });
             push_log(
                 shared,
                 ui,
@@ -689,7 +702,7 @@ fn ensure_web(
             }
         }
         Err(e) => {
-            port_alert(ui, e.clone());
+            port_alert(ui, e.to_string());
             push_log(shared, ui, format!("网页启动失败：{}", e));
             set_foot(ui, "网页启动失败".into());
             web_running(ui, false);
@@ -702,10 +715,9 @@ fn stop_web(shared: &Arc<Shared>, ui: &Weak<AppWindow>, cache: &Arc<Mutex<Option
     let handle = cache.lock().unwrap().take();
     match handle {
         Some(h) => {
-            h.stop.store(true, Ordering::Relaxed);
-            // 监听线程最多 25ms 后醒来退出并释放端口，等它一下再允许重新启动
-            std::thread::sleep(Duration::from_millis(40));
-            push_log(shared, ui, format!("网页服务已停止：{}", h.url));
+            let url = h.url.clone();
+            drop(h);
+            push_log(shared, ui, format!("网页服务已停止：{}", url));
             set_status(ui, "网页服务已停止".into(), false);
             web_running(ui, false);
         }
@@ -766,8 +778,52 @@ fn enqueue_archive_read(shared:&Arc<Shared>,ui:&Weak<AppWindow>,tx:&std::sync::m
     true
 }
 
+fn compact_archives(shared: &Shared) {
+    let (precache, root) = {
+        let cfg = shared.cfg.lock().unwrap();
+        (cfg.archive_precache, PathBuf::from(export_dir_of(&cfg)))
+    };
+    let uid = shared.account_uid.load(Ordering::SeqCst);
+    let guest_file = uid == 0 && !shared.offline.load(Ordering::SeqCst) && preload_path().is_some();
+    let has_comment_bodies = shared.doc.lock().unwrap().videos.iter().any(|v| !v.comments.is_empty());
+    if !guest_file && has_comment_bodies && (!precache || !preview_disk::small_comment_archive(&root, uid)) {
+        let mut archive = shared.doc.lock().unwrap();
+        for video in &mut archive.videos { video.comments = Vec::new(); }
+        if let Some(resources) = archive.archive.get_mut("resources") {
+            *resources = serde_json::Value::Null;
+        }
+    }
+    if let Some(task) = shared.checkpoint.lock().unwrap().as_mut() {
+        task.rows = Vec::new();
+        task.cursors.clear();
+        for target in &mut task.targets { target.comments = Vec::new(); }
+    }
+    let mut messages = shared.messages.lock().unwrap();
+    messages.doc.items = Vec::new();
+    messages.doc.sessions = Vec::new();
+    messages.doc.archive = serde_json::Value::Null;
+}
+
+struct ReleaseArchives<'a>(&'a Shared);
+impl Drop for ReleaseArchives<'_> {
+    fn drop(&mut self) { compact_archives(self.0); }
+}
+
+fn reload_comments(shared: &Shared) {
+    let cfg = shared.cfg.lock().unwrap();
+    let uid = shared.account_uid.load(Ordering::SeqCst);
+    let root = PathBuf::from(export_dir_of(&cfg));
+    drop(cfg);
+    if uid == 0 && preload_path().is_some() && !shared.offline.load(Ordering::SeqCst) { return; }
+    let mut loaded = preview_disk::read_comments(&root, uid);
+    let mut doc = shared.doc.lock().unwrap();
+    loaded.merge_videos(std::mem::take(&mut doc.videos));
+    *doc = loaded;
+}
+
 fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
     while let Ok(cmd) = rx.recv() {
+        let _release = ReleaseArchives(&shared);
         let cmd=match cmd {Cmd::Offline(action)=>{offline::run(action,&shared,&ui);continue;},other=>other};
         if let Cmd::EnsureMessageView{uid}=&cmd {
             messages_ui::ensure_view(*uid,&shared,&ui);
@@ -775,7 +831,29 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
         }
         let task_type=match &cmd {Cmd::Start|Cmd::CrawlUp=>1,Cmd::ProcessResources=>3,_=>0};
         let _task=TaskGuard::begin(&shared,&ui,task_type);
+        let on_demand = !shared.cfg.lock().unwrap().archive_precache;
+        if matches!(&cmd, Cmd::Start | Cmd::CrawlUp | Cmd::ProcessResources | Cmd::Export { .. }) {
+            let compact = {
+                let doc = shared.doc.lock().unwrap();
+                doc.stats.comments > 0 && doc.videos.iter().all(|v| v.comments.is_empty())
+            };
+            if on_demand || compact { reload_comments(&shared); }
+        }
         match cmd {
+            Cmd::ArchiveModeChanged => {
+                if !on_demand {
+                    let _reading = LocalReadGuard::begin(&shared, &ui);
+                    let uid = shared.account_uid.load(Ordering::SeqCst);
+                    let root = PathBuf::from(export_dir_of(&shared.cfg.lock().unwrap()));
+                    if (uid != 0 || shared.offline.load(Ordering::SeqCst))
+                        && preview_disk::small_comment_archive(&root, uid)
+                    {
+                        reload_comments(&shared);
+                        refresh_stats(&shared, &ui);
+                    }
+                    if uid != 0 { messages_ui::load_overview(&shared, &ui, uid); }
+                }
+            }
             Cmd::Offline(_)=>unreachable!("offline actions are handled separately"),
             Cmd::EnsureMessageView{..} => unreachable!("view requests are handled before task state changes"),
             Cmd::Messages(action) => messages_ui::run(action, &shared, &ui),
@@ -1035,7 +1113,7 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                             .iter()
                             .any(|(v, _)| checkpoint::key(v) == checkpoint::key(target))
                         {
-                            rows.push((target.clone(), true));
+                            rows.push((target.without_comments(), true));
                         }
                     }
                 }
@@ -1921,10 +1999,10 @@ fn print_help() {
     println!();
     println!("serve 会在本机起一个网页，把 JSON 列成可浏览的界面：");
     println!("  /              网页列表");
-    println!("  /api/data.json 完整数据（JSON）");
-    println!("  /api/videos    稿件摘要列表");
-    println!("  /api/video?aid=123  单个稿件");
-    println!("  /api/comments?q=关键词  跨稿件搜索评论（含楼中楼）");
+    println!("  /api/comments/data.json 完整数据（JSON）");
+    println!("  /api/comments/posts    稿件摘要列表");
+    println!("  /api/comments/posts/123  单个稿件");
+    println!("  /api/comments/search?q=关键词  跨稿件搜索评论（含楼中楼）");
 }
 
 /// 起本地网页服务，把导出的 JSON 列出来
@@ -1983,9 +2061,10 @@ fn cli_serve(args: &[String]) -> i32 {
     let shared = Arc::new(Mutex::new(doc));
     match web::spawn(shared, port) {
         Ok(p) => {
-            let url = format!("http://127.0.0.1:{}/", p);
+            let base = format!("http://127.0.0.1:{p}");
+            let url = preview_url(&base, 0);
             println!("网页已启动: {}", url);
-            println!("  数据接口: {}api/data.json", url);
+            println!("  数据接口: {base}/api/comments/data.json");
             println!("按 Ctrl+C 结束");
             if open {
                 let _ = webbrowser::open(&url);
@@ -2024,6 +2103,10 @@ fn preload_path() -> Option<PathBuf> {
 }
 
 fn main() -> Result<(), slint::PlatformError> {
+    // Dispatch the worker before opening Slint or the platform credential store.
+    if std::env::args().nth(1).as_deref() == Some("--preview-worker") {
+        std::process::exit(preview_process::run());
+    }
     // 代理策略要在任何请求之前定下来：配置里没写就直连，
     // 不跟随环境变量里那些常常已经失效的 http_proxy / https_proxy
     bili::set_proxy(&Cfg::load().proxy);
@@ -2038,6 +2121,7 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.set_include_replies(cfg.include_replies);
     ui.set_foot_text("就绪 · 扫码登录，或直接粘贴 BV 号".into());
     ui.set_web_port_text(cfg.web_port.to_string().into());
+    ui.set_archive_precache(cfg.archive_precache);
     ui.set_export_dir_text(export_dir_of(&cfg).into());
     ui.set_resource_avatars(cfg.resource_policy.avatars);ui.set_resource_covers(cfg.resource_policy.covers);ui.set_resource_content_images(cfg.resource_policy.content_images);
     ui.set_page_delay_text(cfg.interval_ms.to_string().into());
@@ -2370,13 +2454,14 @@ fn main() -> Result<(), slint::PlatformError> {
         let shared = shared.clone();
         let weak = weak.clone();
         ui.on_settings_open(move || {
-            let (port, dir, delay, delay_max) = {
+            let (port, dir, delay, delay_max, precache) = {
                 let cfg = shared.cfg.lock().unwrap();
                 (
                     cfg.web_port.to_string(),
                     export_dir_of(&cfg),
                     cfg.interval_ms.to_string(),
                     cfg.interval_max_ms.to_string(),
+                    cfg.archive_precache,
                 )
             };
             let policy=shared.cfg.lock().unwrap().resource_policy.clone();
@@ -2386,6 +2471,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 w.set_resource_avatars(policy.avatars);w.set_resource_covers(policy.covers);w.set_resource_content_images(policy.content_images);
                 w.set_page_delay_text(delay.into());
                 w.set_page_delay_max_text(delay_max.into());
+                w.set_archive_precache(precache);
                 w.set_settings_visible(true);
             });
         });
@@ -2394,6 +2480,7 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let shared = shared.clone();
         let weak = weak.clone();
+        let settings_tx = tx.clone();
         ui.on_settings_apply(move || {
             let (port_txt, dir, delay_txt, delay_max_txt) = match weak.upgrade() {
                 Some(w) => (
@@ -2429,6 +2516,16 @@ fn main() -> Result<(), slint::PlatformError> {
             };
             let mut cfg = shared.cfg.lock().unwrap();
             let mut next = cfg.clone();
+            if let Some(w) = weak.upgrade() {
+                let precache = w.get_archive_precache();
+                if cfg.archive_precache != precache
+                    && (shared.busy.load(Ordering::SeqCst) || shared.active_task.load(Ordering::SeqCst) != 0)
+                {
+                    port_alert(&weak, "请等待当前任务结束后再切换归档读取模式".into());
+                    return;
+                }
+                next.archive_precache = precache;
+            }
             next.web_port = port;
             next.interval_ms = low;
             next.interval_max_ms = high;
@@ -2437,7 +2534,10 @@ fn main() -> Result<(), slint::PlatformError> {
             match next.save() {
                 Ok(()) => {
                     let changed_root=!shared.offline.load(Ordering::SeqCst)&&dir!=export_dir_of(&cfg);
+                    let changed_mode = cfg.archive_precache != next.archive_precache;
                     *cfg = next;
+                    drop(cfg);
+                    if changed_mode { let _ = settings_tx.send(Cmd::ArchiveModeChanged); }
                     if changed_root {if let Err(e)=offline::forget_active(){push_log(&shared,&weak,e.to_string());}}
                     set_foot(&weak, "设置已保存".into());
                 }
@@ -2572,7 +2672,9 @@ fn main() -> Result<(), slint::PlatformError> {
         ensure_web(&shared, &weak, &web_url, port, false);
     }
 
-    ui.run()
+    let result = ui.run();
+    web_url.lock().unwrap().take();
+    result
 }
 
 // 从 UI 读回选项（避免在回调里直接 borrow 窗口）
@@ -2669,11 +2771,12 @@ fn restore_checkpoint(shared: &Arc<Shared>, ui: &Weak<AppWindow>, uid: u64) {
     }
     match discovery.task {
         Some(task) => {
-            let restored = task.doc();
-            {
-                let mut doc = shared.doc.lock().unwrap();
-                doc.merge_videos(restored.videos);
+            let mut doc = shared.doc.lock().unwrap();
+            let has_bodies = doc.stats.comments == 0 || doc.videos.iter().any(|v| !v.comments.is_empty());
+            if cfg.archive_precache && has_bodies {
+                doc.merge_videos(task.doc().videos);
             }
+            drop(doc);
             if task.mode == "selected" {
                 let mut rows = shared.rows.lock().unwrap();
                 for target in &task.targets {
@@ -2681,7 +2784,7 @@ fn restore_checkpoint(shared: &Arc<Shared>, ui: &Weak<AppWindow>, uid: u64) {
                         .iter_mut()
                         .find(|(v, _)| checkpoint::key(v) == checkpoint::key(target))
                     {
-                        *v = target.clone();
+                        *v = target.without_comments();
                         *selected = true;
                     } else {
                         rows.push((target.clone(), true));
@@ -2708,19 +2811,12 @@ fn set_account_with_loading(shared: &Arc<Shared>, ui: &Weak<AppWindow>, uid: u64
     if old != uid {
         account_ui::reset(shared, ui, uid);
         emit(ui,|w|{w.set_message_groups(false);w.set_message_groups_confirm(false);message_dates::reset(w);});
-        if preserve_loading {
-            *shared.messages.lock().unwrap() = messages::Store::default();
-        } else {
-            let _local = LocalReadGuard::messages(shared, ui);
-            let root = PathBuf::from(export_dir_of(&shared.cfg.lock().unwrap()));
-            let state = if uid == 0 { messages::Store::default() } else {
-                messages::load(&root, uid).unwrap_or_else(|error| messages::Store {
-                    doc: messages::Doc::new(uid), root: messages::base(&root, uid), notice: error.to_string(),
-                })
-            };
-            *shared.messages.lock().unwrap() = state;
-        }
+        *shared.messages.lock().unwrap() = messages::Store::default();
         messages_ui::refresh(shared, ui);
+        if !preserve_loading && uid != 0 && shared.cfg.lock().unwrap().archive_precache {
+            let _local = LocalReadGuard::messages(shared, ui);
+            messages_ui::load_overview(shared, ui, uid);
+        }
         let saved_ranges=shared.cfg.lock().unwrap().ranges.clone();
         shared.range_session.lock().unwrap().reset(&saved_ranges,preserve_loading);
         render_range_session(shared,ui);
@@ -3149,31 +3245,28 @@ mod export_directory_tests {
 
 fn load_startup_archives(shared: &Arc<Shared>, ui: &Weak<AppWindow>, uid: u64, expected_cookie: &str) {
     let _loading = LocalReadGuard::begin(shared, ui);
-    let root = PathBuf::from(export_dir_of(&shared.cfg.lock().unwrap()));
+    let (root, precache) = {
+        let cfg = shared.cfg.lock().unwrap();
+        (PathBuf::from(export_dir_of(&cfg)), cfg.archive_precache)
+    };
+    let read_messages = || messages_ui::load_overview(shared, ui, uid);
     let workers = local_read::workers();
-    let read_messages = || {
-        let result = messages::load_with_workers(&root, uid, 1);
+    if !precache || !preview_disk::small_comment_archive(&root, uid) {
+        let projection = preview_disk::desktop_projection(&root, uid);
         let cfg = shared.cfg.lock().unwrap();
         if cfg.sessdata != expected_cookie
             || shared.account_uid.load(Ordering::SeqCst) != uid
             || std::path::Path::new(&export_dir_of(&cfg)) != root.as_path()
-        {
-            return;
-        }
-        match result {
-            Ok(store) => {
-                let notice = store.notice.clone();
-                *shared.messages.lock().unwrap() = store;
-                drop(cfg);
-                if !notice.is_empty() { push_log(shared, ui, notice); }
-                messages_ui::refresh(shared, ui);
-            }
-            Err(error) => {
-                drop(cfg);
-                push_log(shared, ui, format!("加载本地消息失败：{error:#}"));
-            }
-        }
-    };
+        { return; }
+        *shared.doc.lock().unwrap() = projection;
+        sync_history_rows(shared);
+        drop(cfg);
+        refresh_rows(shared, ui);
+        refresh_stats(shared, ui);
+        restore_checkpoint(shared, ui, uid);
+        if precache { read_messages(); }
+        return;
+    }
     let read_comments = || {
         load_history_with_workers(shared, ui, uid, expected_cookie, &root, workers.saturating_sub(1).max(1));
         if shared.account_uid.load(Ordering::SeqCst) == uid

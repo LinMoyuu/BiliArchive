@@ -7,6 +7,7 @@ const history={replaceState(state,title,url){ctx.replaceHash(url);}};
 // BEGIN WORKSPACE LOGIC
 
 const $ = id => document.getElementById(id);
+const loading = (id, mode, label, valid) => globalThis.archiveLoading?.begin($(id), mode, label, valid);
 const PAGE = 30;              // 每批往页面上拼多少条
 
 const state = {
@@ -66,7 +67,7 @@ function avatarHTML(user, extra){
   const src = resourceImages.get(original)||(user?._original_resources?.avatar && user.avatar)||original.replace(/^http:\/\//i, 'https://');
   const cls = 'avatar' + (extra ? ' ' + extra : '') + (user && user.is_up ? ' up' : '');
   const inner = src
-    ? `<img src="${esc(src)}" referrerpolicy="no-referrer" loading="lazy" alt="" data-archive-original="${esc(original)}" data-archive-avatar>`
+    ? `<img data-archive-src="${esc(src)}" referrerpolicy="no-referrer" loading="lazy" alt="" data-archive-original="${esc(original)}" data-archive-avatar>`
     : esc(name.slice(0,1));
   const url = spaceURL(user && user.mid);
   return `<div class="${cls}">` + (url
@@ -79,7 +80,7 @@ function picturesHTML(list){
   // B 站图床按 Referer 防盗链：带本地地址的 Referer 一律 403，
   // 所以图片本身和「点开原图」的新标签页都必须不带 Referer
   return '<div class="pics">' + arr.map(u =>
-    `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"><img src="${esc(resourceImages.get(u)||u)}" data-archive-original="${esc(u)}" data-archive-placeholder referrerpolicy="no-referrer" loading="lazy" alt=""></a>`
+    `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"><img data-archive-src="${esc(resourceImages.get(u)||u)}" data-archive-original="${esc(u)}" data-archive-placeholder referrerpolicy="no-referrer" loading="lazy" alt=""></a>`
   ).join('') + '</div>';
 }
 function locationHTML(user){
@@ -112,7 +113,7 @@ function pubMs(v){
 }
 // 发布时间缺失时，使用最早评论时间。
 function firstCommentTime(v){
-  let min = null;
+  let min = timeVal(v.first_comment_time);
   (v.comments || []).forEach(c=>{
     const t = timeVal(c.ctime_text) ?? timeVal(c.ctime);
     if(t !== null && (min === null || t < min)) min = t;
@@ -145,7 +146,7 @@ function rememberResources(value){if(!value||typeof value!=='object')return;if(A
 function coverHTML(src, fallback){
   const imageSrc=resourceImages.get(src)||src;
   if(!src) return `<span>${esc(fallback)}</span>`;
-  return `<a data-cover-link href="${esc(src)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" title="打开封面原图"><img src="${esc(imageSrc)}" data-archive-original="${esc(src)}" data-archive-placeholder referrerpolicy="no-referrer" loading="lazy" alt=""></a>`;
+  return `<a data-cover-link href="${esc(src)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" title="打开封面原图"><img data-archive-src="${esc(imageSrc)}" data-archive-original="${esc(src)}" data-archive-placeholder referrerpolicy="no-referrer" loading="lazy" alt=""></a>`;
 }
 
 function ymd(ms){
@@ -163,7 +164,51 @@ function dateLabel(v){
 }
 
 // ---------------- 载入 ----------------
-const ready=fetch('/api/data.json').then(r=>r.json()).then(d=>{
+let detailRequest;
+let detailVideo;
+let searchRequest;
+let matchedKeys;
+async function searchArchive(q) {
+  searchRequest?.abort();
+  if (!q || !state.doc?.paged_details) {
+    matchedKeys = null;
+    return;
+  }
+  const controller = new AbortController();
+  searchRequest = controller;
+  const finish = loading('vlist', $('vlist').children?.length ? 'overlay' : 'skeleton', '正在搜索稿件', () => !controller.signal.aborted);
+  try {
+    const response = await fetch('/api/comments/data.json?view=search&q=' + encodeURIComponent(q), {signal: controller.signal});
+    if (!response.ok) throw new Error('搜索归档失败');
+    const keys = await response.json();
+    if (!controller.signal.aborted) matchedKeys = new Set(keys);
+  } finally { finish?.(); }
+}
+let loadRequest;
+function loadArchive() {
+  loadRequest?.abort();
+  detailRequest?.abort();
+  searchRequest?.abort();
+  state.doc = null;
+  state.key = '';
+  state.list = [];
+  matchedKeys = null;
+  resourceImages.clear();
+  detailVideo = null;
+  $('boot').textContent = '';
+  $('vlist').textContent = '';
+  $('detail').style.display = 'none';
+  $('tools').style.display = 'none';
+  $('comments').textContent = '';
+  $('stats').textContent = '';
+  const controller = new AbortController();
+  loadRequest = controller;
+  const finish = loading('vlist', 'skeleton', '正在读取稿件', () => !controller.signal.aborted);
+  return fetch('/api/comments/data.json?view=list', {signal: controller.signal}).then(r=>{
+  if (!r.ok) throw new Error('读取归档列表失败');
+  return r.json();
+}).then(async d=>{
+  if (controller.signal.aborted) return;
   rememberResources(d);
   for(const[source,target]of Object.entries(d.resource_images||{}))resourceImages.set(source,target);
   state.doc = d;
@@ -178,26 +223,34 @@ const ready=fetch('/api/data.json').then(r=>r.json()).then(d=>{
   if(usp.get('q')){ state.q = usp.get('q'); $('cq').value = state.q; }
   if(usp.get('vq')){ state.vq = usp.get('vq'); $('q').value = state.vq; }
 
+  finish?.();
   renderStats();
   renderFilters();
   renderTypeFilters();
   renderSort();
   renderVideoSort();
   syncSearchBoxes();
-  renderList();
 
   // 选中稿件：?aid=123 或 #123；带了评论区搜索词时，优先落在第一个命中的稿件
-  const wantAid = parseInt(usp.get('aid') || '', 10) || 0;
+  const wantAid = usp.get('aid');
   const wantKey = decodeURIComponent((location.hash || '').replace('#', ''));
+  if (d.paged_details && (state.vq || (state.q && !wantAid && !wantKey))) {
+    await searchArchive(state.vq || state.q);
+  }
+  if (controller.signal.aborted) return;
   const visible = visibleVideos();
   const hit = visible.find(v=>keyOf(v)===wantKey)
-    || (wantAid ? visible.find(v=>v.aid===wantAid) : null)
+    || (wantAid ? visible.find(v=>String(v.aid)===wantAid) : null)
     || (state.q ? visible.find(v=>videoHitsQuery(v, state.q)) : null)
-    || visible[0] || state.doc.videos[0] || {};
-  selectVideo(keyOf(hit), { keepScroll: true });
+    || visible[0] || state.doc.videos[0];
+  state.key = hit ? keyOf(hit) : '';
+  renderList();
+  await selectVideo(state.key, { keepScroll: true });
 }).catch(e=>{
-  $('boot').textContent = '加载失败：' + e.message;
-});
+  if (!controller.signal.aborted && e.name !== 'AbortError') $('boot').textContent = '加载失败：' + e.message;
+}).finally(() => finish?.());
+}
+let ready = loadArchive();
 
 // ---------------- 左侧稿件列表 ----------------
 function renderStats(){
@@ -218,6 +271,7 @@ function videoHitsQuery(v, q){
   if((v.text||'').toLowerCase().includes(needle)) return true;
   if((v.orig_text||'').toLowerCase().includes(needle)) return true;
   if((v.bvid||'').toLowerCase().includes(needle)) return true;
+  if (state.doc?.paged_details) return matchedKeys?.has(keyOf(v)) ?? false;
   return (v.comments||[]).some(c =>
     (c.content||'').toLowerCase().includes(needle)
     || (c.uname||'').toLowerCase().includes(needle)
@@ -291,7 +345,7 @@ function renderList(){
     return;
   }
   $('vlist').innerHTML = list.map(v=>{
-    const cnt = (v.comments||[]).length;
+    const cnt = v.fetched ?? (v.comments||[]).length;
     const badge = STATUS_LABEL[v.status] ? `<span class="badge ${STATUS_BADGE[v.status]}">${STATUS_LABEL[v.status]}</span>` : '';
     const KN = TYPE_NAME[typeOf(v)] || TYPE_NAME.video;
     const typeBadge = isPlainType(v) ? `<span class="badge k">${KN}</span>` : '';
@@ -324,14 +378,45 @@ function renderList(){
 }
 
 // ---------------- 右栏 ----------------
-function selectVideo(key, opts){
+async function selectVideo(key, opts){
   if(!key) return;
+  const sameVideo = detailVideo && keyOf(detailVideo) === key;
+  detailRequest?.abort();
+  if (!state.doc) return;
+  if (!sameVideo) detailVideo = null;
   state.key = key;
   state.shown = 0;
   state.rendered = 0;
   history.replaceState(null,'','#'+encodeURIComponent(key));
-  const v = findContent(key);
+  let v = findContent(key);
   if(!v) return;
+  if (state.doc.paged_details && !sameVideo) {
+    const controller = new AbortController();
+    detailRequest = controller;
+    $('tools').style.display = 'none';
+    $('detail').style.display = 'flex';
+    $('detail').textContent = '';
+    $('comments').textContent = '';
+    const finish = loading('comments', 'skeleton', '正在读取稿件详情', () => !controller.signal.aborted);
+    try {
+      const url = new URLSearchParams({view: 'detail'});
+      if (v.comment_type) url.set('comment_type', v.comment_type);
+      const response = await fetch('/api/comments/posts/' + encodeURIComponent(v.aid) + '?' + url, {signal: controller.signal});
+      if (!response.ok) throw new Error('读取稿件失败');
+      const detail = await response.json();
+      if (detail.error) throw new Error('稿件暂不可用');
+      if (controller.signal.aborted || state.key !== key) return;
+      rememberResources(detail);
+      for (const [source, target] of Object.entries(detail.resource_images || {})) {
+        resourceImages.set(source, target);
+      }
+      detailVideo = detail;
+    } catch (error) {
+      if (!controller.signal.aborted) $('detail').textContent = error.message;
+      return;
+    } finally { finish?.(); }
+  }
+  v = detailVideo || v;
   const type = typeOf(v);
   const KN = TYPE_NAME[type] || TYPE_NAME.video;
   const plain = isPlainType(v);
@@ -359,6 +444,8 @@ function selectVideo(key, opts){
       ${(v.text_pics||[]).length?picturesHTML(v.text_pics):''}
       ${v.orig_text?`<div class="orig"><span class="who">@${esc(v.orig_author||'原作者')}</span>${esc(v.orig_text)}</div>`:''}
     </div>` : '';
+  const jsonParams = new URLSearchParams();
+  if (v.comment_type) jsonParams.set('comment_type', v.comment_type);
   const openLabel = '打开' + KN;
   const openLink = (v.status==='deleted' || !v.url) ? ''
     : `<a class="btn" href="${esc(v.url)}" target="_blank" rel="noopener">${openLabel}</a>`;
@@ -372,7 +459,7 @@ function selectVideo(key, opts){
     </div>
     <div class="head-tools">
       ${openLink}
-      <a class="btn" href="/api/video?aid=${v.aid}" target="_blank" rel="noopener">本条 JSON</a>
+      <a class="btn" href="/api/comments/posts/${encodeURIComponent(v.aid)}${jsonParams.size ? `?${esc(jsonParams.toString())}` : ''}" target="_blank" rel="noopener">本条 JSON</a>
     </div>`;
   $('tools').style.display = 'flex';
   [...$('vlist').querySelectorAll('.vrow')].forEach(el=>{
@@ -395,7 +482,7 @@ function commentMatches(c, q){
 }
 
 function commentList(){
-  const v = findContent(state.key);
+  const v = detailVideo || findContent(state.key);
   if(!v) return [];
   let list = (v.comments||[]).filter(c=>commentMatches(c, state.q));
   if(state.onlyUp) list = list.filter(c=>c.is_up);
@@ -531,9 +618,18 @@ function syncSearchBoxes(){
 let timer = null;
 $('q').oninput = e => {
   clearTimeout(timer);
-  timer = setTimeout(()=>{
-    state.vq = e.target.value.trim();
-    renderList();
+  timer = setTimeout(async ()=>{
+    const query = e.target.value.trim();
+    $('boot').textContent = '';
+    try {
+      await searchArchive(query);
+      if (query === $('q').value.trim() && state.doc) {
+        state.vq = query;
+        renderList();
+      }
+    } catch (error) {
+      if (error.name !== 'AbortError' && query === $('q').value.trim()) $('boot').textContent = error.message;
+    }
   }, 160);
 };
 
@@ -568,5 +664,5 @@ document.addEventListener('keydown', e=>{
 
 // END WORKSPACE LOGIC
 function applyRoute(){if(!ctx.active())return;const wanted=decodeURIComponent((ctx.url().hash||'').slice(1));if(wanted && findContent(wanted) && wanted!==state.key)selectVideo(wanted,{keepScroll:true});}
-return {ready,activate(fromHistory){return ready.then(()=>{if(ctx.active()){if(fromHistory)applyRoute();if(state.rendered<Math.min(PAGE,state.list.length))appendComments();}});},deactivate(){},refresh(){}};
+return {get ready(){return ready;},accountChanged(){ready = loadArchive();},activate(fromHistory){return ready.then(()=>{if(ctx.active()){if(fromHistory)applyRoute();if(state.rendered<Math.min(PAGE,state.list.length))appendComments();}});},deactivate(){},refresh(){}};
 };

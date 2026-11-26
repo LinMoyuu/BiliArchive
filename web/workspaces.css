@@ -458,3 +458,71 @@ body:has(#account-toggle[data-mode="offline"])>main{height:auto;min-height:0;fle
  .app-header:has(#account-toggle[data-mode="offline"]) :is(#comment-header,#message-header){flex-basis:100%;order:2}
  .web-account:has(#account-toggle[data-mode="offline"]){max-width:100%;order:1;margin-left:auto}
 }
+
+/* Keep image slots visible and stable while their requests wait. */
+.attachments img[data-archive-src]{display:block;width:200px;height:160px;max-width:100%;object-fit:contain;background:#f1f3f7}
+img[data-archive-src]:not([src]){color:transparent}
+
+
+/* Only delayed or active requests animate. Fixed image slots do not reflow. */
+#comment-workspace #boot:empty{display:none}
+#comment-workspace #boot{padding:8px 12px;text-align:left;color:#9b344e}
+[data-loading="skeleton"]::after{
+ content:"";display:block;box-sizing:border-box;min-height:132px;margin:10px 12px;border-radius:8px;
+ background:
+  repeating-linear-gradient(to bottom,#e8ecf3 0 11px,transparent 11px 44px) 8px 14px/38% calc(100% - 20px) no-repeat,
+  repeating-linear-gradient(to bottom,#f0f2f7 0 7px,transparent 7px 44px) 8px 31px/62% calc(100% - 36px) no-repeat,
+  #fafbfe;
+ animation:archive-placeholder-pulse 1.3s ease-in-out infinite alternate;
+}
+[data-loading="overlay"]{position:relative}
+[data-loading="overlay"]::before{
+ content:"";position:sticky;inset-block-start:45%;z-index:2;display:block;pointer-events:none;
+ box-sizing:border-box;width:28px;height:28px;margin:0 auto -28px;
+ border:3px solid #dce3ed;border-top-color:#687c99;border-radius:50%;background:#fff;
+ animation:archive-loader-spin .85s linear infinite;
+}
+[data-loading="inline"]::before{
+ content:"";display:inline-block;vertical-align:middle;width:10px;height:10px;margin-inline:4px;
+ border:2px solid #dce3ed;border-top-color:#687c99;border-radius:50%;
+ animation:archive-loader-spin .85s linear infinite;
+}
+img[data-archive-src]:not([src]),img[data-image-state="loading"]{background-color:#eef1f6;color:transparent}
+img[data-image-state="loading"],.account-photo[data-image-state="loading"] #account-fallback{
+ background-image:linear-gradient(105deg,transparent 30%,#fff9 50%,transparent 70%);
+ background-size:240% 100%;
+ animation:archive-image-shimmer 1.25s 150ms linear infinite;
+}
+@keyframes archive-image-shimmer{from{background-position:100% 0}to{background-position:0 0}}
+img[data-image-state="loaded"],.account-photo[data-image-state="loaded"] #account-avatar{animation:archive-image-in .16s ease-out}
+:is(.pics,.detail-cover) .archive-image-placeholder{width:100%;height:100%}
+.attachments .archive-image-placeholder[data-image-slot]{width:200px;height:160px;max-width:100%}
+@keyframes archive-placeholder-pulse{from{opacity:1}to{opacity:.57}}
+@keyframes archive-loader-spin{to{transform:rotate(360deg)}}
+@keyframes archive-image-in{from{opacity:.25}to{opacity:1}}
+@media (prefers-reduced-motion:reduce){
+ [data-loading]::before,[data-loading]::after,img[data-image-state],.account-photo[data-image-state] :is(img,#account-fallback){animation:none!important}
+}
+
+
+/* Reserve space for all paging states and prevent the progress indicator from moving rows. */
+#message-workspace :is(.pager,.group-more,.like-detail-progress){min-block-size:44px}
+#message-workspace :is(#m-page,[data-group-progress],[data-like-progress],#m-chat-progress){
+ display:inline-flex;align-items:center;gap:4px;min-block-size:18px;font-size:12px;line-height:18px;
+}
+#message-workspace :is(#m-page,[data-group-progress],[data-like-progress],#m-chat-progress)::before{
+ content:"";display:inline-block;box-sizing:border-box;flex:0 0 14px;width:14px;height:14px;margin:0;visibility:hidden;
+}
+#message-workspace :is(#m-page,[data-group-progress],[data-like-progress],#m-chat-progress)[data-loading="inline"]::before{visibility:visible}
+#message-workspace :is(#m-more,#m-chat-more,[data-group-more],[data-like-more]){
+ min-inline-size:92px;min-block-size:30px;
+}
+#message-workspace :is(#m-more,#m-chat-more,[data-group-more],[data-like-more])[hidden]{
+ display:inline-block!important;visibility:hidden;
+}
+#message-workspace .like-topic .subject-slot:not(:empty){display:block;width:100%;height:100%}
+#message-workspace .like-topic:has(.group-cover-link) .like-topic-excerpt{display:none}
+
+#m-page-error{color:#bd3f55;font-size:12px;overflow-wrap:anywhere}
+#m-page-error:empty,#message-workspace.chat-active #m-page-error{display:none}
+#message-workspace #m-session-pane{scrollbar-gutter:stable}

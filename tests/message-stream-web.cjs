@@ -22,11 +22,11 @@ vm.runInContext(source,context);const run=code=>vm.runInContext(code,context);co
  await run('ready');assert.equal(run('stream.loaded'),50);assert.equal(node('more').hidden,false);assert.equal(observers[0].options.rootMargin,'0px 0px 240px 0px');
  const first=node('items').innerHTML;observers[0].fire(node('sentinel'));observers[0].fire(node('sentinel'));await flush();
  assert.equal(requests.filter(u=>u.includes('offset=50')).length,1);assert(node('items').innerHTML.startsWith(first));assert.equal(run('stream.loaded'),99);assert.equal(run('stream.next'),100,'advance raw offset even when one row repeats');
- fail=true;observers[0].fire(node('sentinel'));await flush();assert(node('error').textContent.includes('503'));assert.equal(node('more').textContent,'重试加载');const failedCount=requests.length;
+ fail=true;observers[0].fire(node('sentinel'));await flush();assert(node('page-error').textContent.includes('503'));assert.equal(node('more').textContent,'重试加载');const failedCount=requests.length;
  observers[0].fire(node('sentinel'));await flush();assert.equal(requests.length,failedCount,'failed load stops automatic retry');
  await node('more').onclick();assert.equal(run('stream.done'),true);assert.equal(node('more').hidden,true);assert.equal(run('stream.loaded'),149);
- await run('load()');run('workspaceVisible=false;pageObserver.disconnect()');const hiddenCount=requests.length;await run('loadMore(true)');assert.equal(requests.length,hiddenCount);
- run('workspaceVisible=true;resumePages()');observers[0].fire(node('sentinel'));await flush();assert.equal(run('stream.next'),100);
+ await run('load()');run('workspaceVisible=false;disconnectPageObservers()');const hiddenCount=requests.length;await run('loadMore(true)');assert.equal(requests.length,hiddenCount);
+ run('workspaceVisible=true;resumePages()');observers.at(-1).fire(node('sentinel'));await flush();assert.equal(run('stream.next'),100);
  empty=true;await run('load()');assert.equal(run('stream.done'),true);assert.equal(run('stream.loaded'),0);assert(node('items').innerHTML.includes('没有符合条件'));empty=false;
  // A reset invalidates an in-flight result and prevents old queued requests from being sent.
  defer=true;const stale=run('load()');await flush();const fresh=run("state.q='fresh';load()");await flush();assert.equal(pending.length,2);pending.shift()();await stale;assert.equal(node('items').innerHTML,'');pending.shift()();await fresh;assert.equal(run('stream.loaded'),50);
