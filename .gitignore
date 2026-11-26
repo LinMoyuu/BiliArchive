@@ -15,6 +15,7 @@
 /checkpoints/
 /test-out/
 /BiliCommentHubData/
+/BiliArchiveData/
 /bili-comments*.json
 /all.json
 *.log

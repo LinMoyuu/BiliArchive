@@ -17,16 +17,21 @@
   const key=JSON.stringify([safe,remote,scope]);
   if(key===avatarUrl)return;
   window.archiveImages?.reset(avatar);
+  window.archiveImages?.stopIndicator?.(avatar);
   avatarUrl=key;avatar.hidden=true;fallback.hidden=false;avatar.removeAttribute('src');
   const photo=avatar.parentElement;
   photo?.removeAttribute('data-image-state');
-  avatar.onload=()=>{if(avatarUrl===key){photo?.setAttribute('data-image-state','loaded');avatar.hidden=false;fallback.hidden=true;}};
+  avatar.onload=()=>{if(avatarUrl===key){window.archiveImages?.stopIndicator?.(avatar);photo?.setAttribute('data-image-state','loaded');avatar.hidden=false;fallback.hidden=true;}};
   avatar.onerror=()=>{
    if(avatarUrl!==key||window.archiveImages?.retry(avatar,remote))return;
+   window.archiveImages?.stopIndicator?.(avatar);
    photo?.setAttribute('data-image-state','fallback');
    avatar.hidden=true;fallback.hidden=false;
   };
-  if(safe||remote){photo?.setAttribute('data-image-state','loading');avatar.src=safe||remote;}
+  if(safe||remote){
+   window.archiveImages?.startIndicator?.(avatar);
+   avatar.src=safe||remote;
+  }
  }
  async function refresh(){
   const token=++request;

@@ -67,7 +67,7 @@ function avatarHTML(user, extra){
   const src = resourceImages.get(original)||(user?._original_resources?.avatar && user.avatar)||original.replace(/^http:\/\//i, 'https://');
   const cls = 'avatar' + (extra ? ' ' + extra : '') + (user && user.is_up ? ' up' : '');
   const inner = src
-    ? `<img data-archive-src="${esc(src)}" referrerpolicy="no-referrer" loading="lazy" alt="" data-archive-original="${esc(original)}" data-archive-avatar>`
+    ? `<span class="archive-image-slot archive-avatar-slot"><img data-archive-src="${esc(src)}" referrerpolicy="no-referrer" loading="lazy" alt="" data-archive-original="${esc(original)}" data-archive-avatar></span>`
     : esc(name.slice(0,1));
   const url = spaceURL(user && user.mid);
   return `<div class="${cls}">` + (url
@@ -80,7 +80,7 @@ function picturesHTML(list){
   // B 站图床按 Referer 防盗链：带本地地址的 Referer 一律 403，
   // 所以图片本身和「点开原图」的新标签页都必须不带 Referer
   return '<div class="pics">' + arr.map(u =>
-    `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"><img data-archive-src="${esc(resourceImages.get(u)||u)}" data-archive-original="${esc(u)}" data-archive-placeholder referrerpolicy="no-referrer" loading="lazy" alt=""></a>`
+    `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"><span class="archive-image-slot"><img data-archive-src="${esc(resourceImages.get(u)||u)}" data-archive-original="${esc(u)}" data-archive-placeholder referrerpolicy="no-referrer" loading="lazy" alt=""></span></a>`
   ).join('') + '</div>';
 }
 function locationHTML(user){
@@ -131,6 +131,21 @@ function compareVideoTime(a, b){
   if(kb === null) return -1;
   return state.videoSort === 'old' ? ka - kb : kb - ka;
 }
+function videoCommentCount(video){
+  const reported = Number(video.comment_total);
+  if (Number.isFinite(reported) && reported > 0) return reported;
+  const comments = video.comments || [];
+  const topLevel = video.fetched ?? comments.length;
+  const replies = video.replies ?? comments.reduce((count, comment) => count + (comment.replies || []).length, 0);
+  return (Number(topLevel) || 0) + (Number(replies) || 0);
+}
+function compareVideos(a, b){
+  if (state.videoSort === 'comments' || state.videoSort === 'comments-asc') {
+    const difference = videoCommentCount(a) - videoCommentCount(b);
+    if (difference) return state.videoSort === 'comments-asc' ? difference : -difference;
+  }
+  return compareVideoTime(a, b);
+}
 function renderVideoSort(){
   document.querySelectorAll('#videoSortSeg button').forEach(button=>{
     button.setAttribute('aria-pressed', String(button.dataset.videoSort === state.videoSort));
@@ -146,7 +161,7 @@ function rememberResources(value){if(!value||typeof value!=='object')return;if(A
 function coverHTML(src, fallback){
   const imageSrc=resourceImages.get(src)||src;
   if(!src) return `<span>${esc(fallback)}</span>`;
-  return `<a data-cover-link href="${esc(src)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" title="打开封面原图"><img data-archive-src="${esc(imageSrc)}" data-archive-original="${esc(src)}" data-archive-placeholder referrerpolicy="no-referrer" loading="lazy" alt=""></a>`;
+  return `<a data-cover-link href="${esc(src)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" title="打开封面原图"><span class="archive-image-slot"><img data-archive-src="${esc(imageSrc)}" data-archive-original="${esc(src)}" data-archive-placeholder referrerpolicy="no-referrer" loading="lazy" alt=""></span></a>`;
 }
 
 function ymd(ms){
@@ -290,7 +305,7 @@ function matchVideo(v){
 }
 
 function visibleVideos(){
-  return (state.doc.videos||[]).filter(matchVideo).sort(compareVideoTime);
+  return (state.doc.videos||[]).filter(matchVideo).sort(compareVideos);
 }
 
 function renderFilters(){

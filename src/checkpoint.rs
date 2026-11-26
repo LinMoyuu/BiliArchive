@@ -10,17 +10,27 @@ use std::{
     path::{Path, PathBuf},
 };
 
+const CONFIG_DIR_ENV: &str = "BILI_COMMENT_HUB_CONFIG_DIR";
+
 pub fn data_dir() -> Result<PathBuf> {
-    if let Some(path) = std::env::var_os("BILI_COMMENT_HUB_CONFIG_DIR") {
-        let path = PathBuf::from(path);
-        if !path.is_absolute() {
-            bail!("BILI_COMMENT_HUB_CONFIG_DIR 必须为绝对路径");
-        }
-        return Ok(path);
+    if let Some(path) = std::env::var_os(CONFIG_DIR_ENV) {
+        return config_dir_override(path.into());
     }
     dirs::config_dir()
-        .map(|p| p.join("BiliCommentHub"))
+        .as_deref()
+        .map(default_data_dir)
         .ok_or_else(|| anyhow::anyhow!("找不到应用配置目录"))
+}
+
+fn config_dir_override(path: PathBuf) -> Result<PathBuf> {
+    if !path.is_absolute() {
+        bail!("{CONFIG_DIR_ENV} 必须为绝对路径");
+    }
+    Ok(path)
+}
+
+fn default_data_dir(base: &Path) -> PathBuf {
+    base.join("BiliArchive")
 }
 
 pub fn root_dir() -> Result<PathBuf> {
@@ -271,6 +281,24 @@ pub fn latest_in(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_data_directory_ignores_legacy_data() {
+        let temp = tempfile::tempdir().unwrap();
+        let current = temp.path().join("BiliArchive");
+        let legacy = temp.path().join("BiliCommentHub");
+        assert_eq!(default_data_dir(temp.path()).join("exports"), current.join("exports"));
+
+        std::fs::create_dir_all(legacy.join("exports")).unwrap();
+        std::fs::write(legacy.join("config.json"), "{}").unwrap();
+        std::fs::write(legacy.join("exports/old.json"), "{}").unwrap();
+        assert_eq!(default_data_dir(temp.path()), current);
+        assert!(legacy.join("exports/old.json").is_file());
+        assert!(!current.exists());
+        assert_eq!(config_dir_override(legacy.clone()).unwrap(), legacy);
+        assert!(config_dir_override(PathBuf::from("relative")).is_err());
+    }
+
     #[test]
     fn mixed_types_restart_and_failure_page() {
         let dir = tempfile::tempdir().unwrap();

@@ -1,5 +1,5 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>评论聚合台 · BiliArchive</title><link rel="stylesheet" href="/assets/workspaces.css"></head><body>
-<header class="app-header"><div class="app-brand"><div id="product-icon" class="app-logo">评</div><div class="product-picker"><button id="workspace-toggle" aria-haspopup="menu" aria-controls="workspace-menu" aria-expanded="false"><strong id="product-name">评论聚合台</strong><svg class="workspace-chevron" viewBox="0 0 10 6" aria-hidden="true"><path d="M1 1 L5 5 L9 1"/></svg></button><span id="product-subtitle">稿件评论 · 收集与归档</span><div id="workspace-menu" role="menu" hidden><button id="workspace-comments" role="menuitemradio" aria-checked="true" data-workspace="comments"><b>评论聚合台</b><small>稿件评论</small><span class="workspace-check">✓</span></button><button id="workspace-messages" role="menuitemradio" aria-checked="false" data-workspace="messages"><b>消息归档台</b><small>私信、粉丝团与互动通知</small><span class="workspace-check">✓</span></button></div></div></div>
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>评论聚合 · BiliArchive</title><link rel="stylesheet" href="/assets/workspaces.css"></head><body>
+<header class="app-header"><div class="app-brand"><div id="product-icon" class="app-logo">评</div><div class="product-picker"><button id="workspace-toggle" aria-haspopup="menu" aria-controls="workspace-menu" aria-expanded="false"><strong id="product-name">评论聚合</strong><svg class="workspace-chevron" viewBox="0 0 10 6" aria-hidden="true"><path d="M1 1 L5 5 L9 1"/></svg></button><span id="product-subtitle">稿件评论 · 收集与归档</span><div id="workspace-menu" role="menu" hidden><button id="workspace-comments" role="menuitemradio" aria-checked="true" data-workspace="comments"><b>评论聚合</b><small>稿件评论</small><span class="workspace-check">✓</span></button><button id="workspace-messages" role="menuitemradio" aria-checked="false" data-workspace="messages"><b>消息归档</b><small>私信、粉丝团与互动通知</small><span class="workspace-check">✓</span></button></div></div></div>
 <div id="comment-header">  <div class="stats" id="stats"></div>
   <div class="spacer"></div>
   <div class="links">
@@ -27,9 +27,11 @@
         <button class="chip" data-type="article" aria-pressed="false">专栏</button>
         <button class="chip" data-type="audio" aria-pressed="false">音频</button>
       </div>
-      <div class="seg" id="videoSortSeg" role="group" aria-label="稿件时间排序">
+      <div class="seg" id="videoSortSeg" role="group" aria-label="稿件排序">
         <button data-video-sort="new" aria-pressed="true">时间倒序</button>
         <button data-video-sort="old" aria-pressed="false">时间正序</button>
+        <button data-video-sort="comments" aria-pressed="false">评论最多</button>
+        <button data-video-sort="comments-asc" aria-pressed="false">评论最少</button>
       </div>
     </div>
     <div class="loading" id="boot" role="alert"></div>

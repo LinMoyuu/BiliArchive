@@ -16,9 +16,16 @@ function image(parent, name) {
   ['data-archive-original', 'https://i0.hdslb.com/' + name + '.jpg'],
   ['data-archive-placeholder', ''],
  ]);
+ const slotAttrs=new Map();
+ const slot={
+  setAttribute(key,value){slotAttrs.set(key,value);},
+  removeAttribute(key){slotAttrs.delete(key);},
+  hasAttribute(key){return slotAttrs.has(key);},
+ };
  return {
-  tagName: 'IMG', isConnected: true, complete: true, currentSrc: '',
-  closest: selector => selector==='[data-archive-scroll-root]' ? parent.scrollRoot || null : parent.hidden ? parent : null,
+  slot, tagName: 'IMG', isConnected: true, complete: true, currentSrc: '',
+  closest: selector => selector==='[data-archive-scroll-root]' ? parent.scrollRoot || null :
+   selector==='[hidden]' ? (parent.hidden ? parent : null) : slot,
   matches: () => true,
   getAttribute: key => attrs.get(key),
   setAttribute: (key, value) => attrs.set(key, value),
@@ -45,7 +52,7 @@ vm.runInNewContext(read('web/archive-images.js'), {
   observe() {}
   unobserve() {}
  },
- setTimeout(callback) { timers.set(++timerId, callback); return timerId; },
+ setTimeout(callback,delay) { timers.set(++timerId, {callback,delay}); return timerId; },
  clearTimeout(id) { timers.delete(id); },
 });
 const flush = () => { while(frames.length) frames.shift()(); };
@@ -64,18 +71,23 @@ assert.equal(first[0].fetchPriority, 'low');
 
 listeners.load({target:first[0]});
 assert.equal(first[0].getAttribute('data-image-state'),'loaded');
+for(const timer of [...timers.values()].filter(timer=>timer.delay===120))timer.callback();
+assert(!first[0].slot.hasAttribute('data-image-loading'),'cache hit never flashes a spinner');
+assert(first[1].slot.hasAttribute('data-image-loading'),'slow request animates on its frame');
 flush();
 assert(first[4].src, 'the next image starts after a slot opens');
 let interrupted = false;
 listeners.error({target:first[1], stopImmediatePropagation() { interrupted = true; }});
 assert(interrupted && first[1].src === 'https://i0.hdslb.com/1.jpg', 'local miss retries the CDN in the same slot');
+assert(first[1].slot.hasAttribute('data-image-loading'),'fallback retains its active spinner');
 flush();
 assert(!first[5].src);
-const latestTimeout = [...timers.values()].at(-1);
-latestTimeout();
+const latestTimeout = [...timers.values()].filter(timer=>timer.delay===8000).at(-1);
+latestTimeout.callback();
 flush();
 assert(first[1].placeholder && first[5].src, 'a stalled fallback is replaced and releases its slot');
 assert.equal(first[1].getAttribute('data-image-state'),'fallback');
+assert(!first[1].slot.hasAttribute('data-image-loading'));
 
 window.archiveImages.pause({querySelectorAll: () => first});
 visible.hidden = true;
@@ -84,7 +96,7 @@ window.archiveImages.resume({querySelectorAll: () => [incoming]});
 intersect(incoming);
 flush();
 assert(incoming.src);
-assert(first.slice(2).every(img => !img.src && !img.hasAttribute('data-image-state')), 'switching cancels requests and animations');
+assert(first.slice(2).every(img => !img.src && !img.hasAttribute('data-image-state') && !img.slot.hasAttribute('data-image-loading')), 'switching cancels requests and animations');
 assert(first[0].src, 'already completed images survive switching');
 listeners.load({target:incoming});
 const undecided = image(other,'pending-map');
@@ -109,6 +121,25 @@ rootedIntersections.get(sidebar)([{target:sessionAvatar,isIntersecting:true}]);
 flush();
 assert(sessionAvatar.src,'scrolling the sidebar starts avatar requests without clicking');
 listeners.load({target:sessionAvatar});
+
+const lookupAvatar = image(other,'profile-avatar');
+window.archiveImages.startIndicator(lookupAvatar,'profile');
+for(const timer of [...timers.values()].filter(timer=>timer.delay===120))timer.callback();
+assert(lookupAvatar.slot.hasAttribute('data-image-loading'));
+window.archiveImages.setSource(lookupAvatar,'/api/archive-resources/fetched-avatar');
+window.archiveImages.stopIndicator(lookupAvatar,'profile');
+assert(lookupAvatar.slot.hasAttribute('data-image-loading'),'profile spinner transfers to the new image request');
+intersect(lookupAvatar);
+flush();
+assert(lookupAvatar.src);
+listeners.load({target:lookupAvatar});
+assert(!lookupAvatar.slot.hasAttribute('data-image-loading'));
+const pausedAvatars = [image(other,'paused-a'), image(other,'paused-b')];
+for(const avatar of pausedAvatars)window.archiveImages.startIndicator(avatar,'profile');
+for(const timer of [...timers.values()].filter(timer=>timer.delay===120))timer.callback();
+assert(pausedAvatars.every(avatar=>avatar.slot.hasAttribute('data-image-loading')));
+window.archiveImages.pause({querySelectorAll:()=>pausedAvatars});
+assert(pausedAvatars.every(avatar=>!avatar.slot.hasAttribute('data-image-loading')));
 
 for(const file of ['web/comments.js','web/messages.js']){
  const imageTags = [...read(file).matchAll(/<img[^\n>]*data-archive-original[^\n>]*>/g)].map(match => match[0]);

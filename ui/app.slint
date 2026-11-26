@@ -619,7 +619,7 @@ component WorkspacePicker inherits Rectangle {
             spacing: 1px; alignment: center;
             title-row := HorizontalLayout {
                 spacing: 6px; alignment: LayoutAlignment.start;
-                product-label := Text { width: self.preferred-width; text: root.current == 0 ? "评论聚合台" : "消息归档台"; color: Theme.text; font-size: Theme.font-title; font-weight: 700; }
+                product-label := Text { width: self.preferred-width; text: root.current == 0 ? "评论聚合" : "消息归档"; color: Theme.text; font-size: Theme.font-title; font-weight: 700; }
                 DownChevron { y: (parent.height - self.height)/2; }
             }
             Text { text: root.current == 0 ? "稿件评论 · 收集与归档" : "私信与互动通知 · 收集与归档"; color: Theme.faint; font-size: Theme.font-hint; }
@@ -644,7 +644,7 @@ component WorkspacePicker inherits Rectangle {
                     x: 5px; y: 5px + value * 56px; width: parent.width - 10px; height: 56px; border-radius: 6px;
                     background: menu-focus.highlighted == value ? Theme.accent-soft : white;
                     VerticalLayout { padding-left: 12px; padding-right: 30px; spacing: 2px; alignment: center;
-                        Text { text: value == 0 ? "评论聚合台" : "消息归档台"; color: Theme.text; font-size: Theme.font-section; font-weight: 700; }
+                        Text { text: value == 0 ? "评论聚合" : "消息归档"; color: Theme.text; font-size: Theme.font-section; font-weight: 700; }
                         Text { text: value == 0 ? "稿件评论" : "私信、粉丝团与互动通知"; color: Theme.muted; font-size: Theme.font-hint; }
                     }
                     Text { x: parent.width - 26px; width: 20px; height: parent.height; text: root.current == value ? "✓" : ""; color: Theme.accent-dark; vertical-alignment: center; }
@@ -698,7 +698,7 @@ component TaskControls inherits Rectangle {
             text: "结束"; primary: true; width: 72px; clicked => {root.stop();}
         }
         if !root.loading-local && root.active-task != root.workspace && root.active-task != 3 && (root.busy || root.active-task != 0) : Text {
-            text: root.active-task == 1 ? "评论聚合台正在采集…" : root.active-task == 2 ? "消息归档台正在采集…" : "正在处理，请稍候…";
+            text: root.active-task == 1 ? "评论聚合正在采集…" : root.active-task == 2 ? "消息归档正在采集…" : "正在处理，请稍候…";
             color: Theme.muted; vertical-alignment: center;
         }
         if !root.loading-local && !root.busy && root.active-task == 0 : Btn {
@@ -826,7 +826,7 @@ export component AppWindow inherits Window {
     callback message-export();
     callback message-web();
 
-    title: (root.workspace == 0 ? "评论聚合台" : "消息归档台") + " · BiliArchive";
+    title: (root.workspace == 0 ? "评论聚合" : "消息归档") + " · BiliArchive";
     preferred-width: 1200px;
     preferred-height: 792px;
     min-width: 1040px;

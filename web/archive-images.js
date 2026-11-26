@@ -2,6 +2,7 @@
 (() => {
  const attempted=new WeakMap();
  const finished=new WeakMap();
+ const indicators=new WeakMap();
  const queued=new Set();
  const active=new Map();
  const holds=new Map();
@@ -41,16 +42,42 @@
   observed.get(img)?.unobserve(img);
   observed.delete(img);
  }
+ function clearIndicator(img){
+  const indicator=indicators.get(img);
+  if(!indicator)return;
+  clearTimeout(indicator.timer);
+  indicator.frame.removeAttribute('data-image-loading');
+  indicators.delete(img);
+ }
+ function stopIndicator(img, reason='image'){
+  const indicator=indicators.get(img);
+  if(!indicator)return;
+  indicator.reasons.delete(reason);
+  if(!indicator.reasons.size)clearIndicator(img);
+ }
+ function startIndicator(img, reason='image'){
+  const existing=indicators.get(img);
+  if(existing){existing.reasons.add(reason);return;}
+  const frame=img.closest?.('.archive-image-slot, .account-photo');
+  if(!frame)return;
+  const timer=setTimeout(()=>{
+   if(img.isConnected)frame.setAttribute('data-image-loading','');
+  },120);
+  indicators.set(img,{frame,timer,reasons:new Set([reason])});
+ }
  function finish(img, state){
   const job=active.get(img);
   if(!job)return;
   clearTimeout(job.timer);
+  stopIndicator(img);
   active.delete(img);
   finished.set(img,job.source);
   img.setAttribute('data-image-state',state);
   schedule();
  }
- function cancel(img){
+ function cancel(img, preserveProfile=false){
+  if(preserveProfile===true)stopIndicator(img);
+  else clearIndicator(img);
   const job=active.get(img);
   if(job){
    clearTimeout(job.timer);
@@ -90,8 +117,10 @@
    img.referrerPolicy='no-referrer';
    // IntersectionObserver already decides when the image is needed.
    img.loading='eager';
+   startIndicator(img);
    arm(img,job);
    img.src=publicURL(source)||source;
+   if(img.complete&&img.naturalWidth>0)finish(img,'loaded');
   }
  }
  function createObserver(root=null){
@@ -125,7 +154,10 @@
   }
   const previous=img.getAttribute('data-archive-src');
   if(previous===source||pendingOnly&&(active.has(img)||finished.has(img)))return;
-  cancel(img);
+  // Transfer the frame's indicator from profile lookup to the new image.
+  const preserveProfile=indicators.get(img)?.reasons.has('profile');
+  cancel(img,preserveProfile);
+  if(preserveProfile)startIndicator(img);
   finished.delete(img);
   attempted.delete(img);
   img.removeAttribute('src');
@@ -168,13 +200,14 @@
   return true;
  }
  function placeholder(img){
+  clearIndicator(img);
   const fallback=document.createElement('span');
   fallback.className='archive-image-placeholder';
   if(img.hasAttribute('data-archive-placeholder'))fallback.setAttribute?.('data-image-slot','');
   fallback.textContent='图片未能加载';
   img.replaceWith(fallback);
  }
- window.archiveImages={publicURL,retry,placeholder,resume,pause,hold,release,setSource,reset:img=>attempted.delete(img)};
+ window.archiveImages={publicURL,retry,placeholder,resume,pause,hold,release,setSource,startIndicator,stopIndicator,reset:img=>attempted.delete(img)};
  document.addEventListener('error',event=>{
   const img=event.target;
   if(img?.tagName!=='IMG'||!img.hasAttribute('data-archive-original'))return;

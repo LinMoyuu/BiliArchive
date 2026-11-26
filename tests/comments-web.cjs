@@ -7,7 +7,7 @@ assert.equal([...html.matchAll(/data-sort="([^"]+)"/g)].map(m=>m[1]).join(','),'
 const script = fs.readFileSync(require('node:path').join(require('node:path').dirname(htmlPath),'comments.js'),'utf8').replace(/\r\n/g,'\n').match(/BEGIN WORKSPACE LOGIC\n([\s\S]*?)\n\/\/ END WORKSPACE LOGIC/)[1];
 const nodes = new Map();
 const row = {dataset:{key:'video-1'},classList:{toggle(){}},scrollIntoView(){}};
-const buttons = ['new','old'].map(value=>({dataset:{videoSort:value},attributes:{},setAttribute(k,v){this.attributes[k]=v;}}));
+const buttons = ['new','old','comments','comments-asc'].map(value=>({dataset:{videoSort:value},attributes:{},setAttribute(k,v){this.attributes[k]=v;}}));
 function node(id){
   if(!nodes.has(id)) nodes.set(id, {innerHTML:'',style:{},value:'',scrollTop:0,
     classList:{toggle(){},remove(){}},addEventListener(){},
@@ -46,6 +46,20 @@ state.doc={videos};state.key='video-1';
 assert.equal(state.videoSort,'new');
 assert.equal(visibleVideos().map(v=>v.aid).join(','),'3,4,5,1,2');
 state.videoSort='old';assert.equal(visibleVideos().map(v=>v.aid).join(','),'1,5,3,4,2');
+videos[0].comment_total=6;videos[0].fetched=90;
+videos[1].comment_total=0;videos[1].fetched=4;videos[1].replies=5;
+videos[2].comment_total=6;
+videos[3].comments=[{replies:[{},{}]}];
+state.videoSort='comments';
+assert.equal(visibleVideos().map(v=>v.aid).join(','),'2,3,1,4,5');
+assert.equal(videoCommentCount(videos[0]),6,'platform count wins');
+assert.equal(videoCommentCount(videos[3]),3,'standalone documents count archived replies');
+state.filter='public';
+assert.equal(visibleVideos().map(v=>v.aid).join(','),'2,3,1,5');
+state.videoSort='comments-asc';
+assert.equal(visibleVideos().map(v=>v.aid).join(','),'5,3,1,2');
+state.filter='all';
+assert.equal(visibleVideos().map(v=>v.aid).join(','),'5,4,3,1,2');
 assert.equal(videos.map(v=>v.aid).join(','),'1,2,3,4,5','source order must remain unchanged');
 state.vq='alpha';state.type='video';state.filter='public';state.sort='like';
 let selected=0,commentsReset=0;

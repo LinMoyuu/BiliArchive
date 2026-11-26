@@ -184,7 +184,7 @@ function subjectReason(label,reason,classes=''){
  return reason?`<span class="subject-reason ${classes}" tabindex="0" role="note" aria-label="${esc(label+'：'+reason)}" data-reason="${esc(reason)}">${esc(label)}</span>`:`<span class="${classes}">${esc(label)}</span>`;
 }
 function subjectContent(s,mode){
- if(mode==='cover'||mode==='like-cover'){const cover=imageURL(s.cover);return cover?`<a class="group-cover-link" href="${esc(cover)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"><img data-group-cover data-archive-src="${esc(resourceImages.get(cover)||(s.cover_src?.startsWith('/api/messages/attachments/')?s.cover_src:cover))}" data-original="${esc(cover)}" data-archive-original="${esc(cover)}" alt="主题封面" loading="lazy" referrerpolicy="no-referrer"></a>`:mode==='like-cover'?'':'<span class="group-cover-placeholder" aria-label="暂无封面"></span>';}
+ if(mode==='cover'||mode==='like-cover'){const cover=imageURL(s.cover);return cover?`<a class="group-cover-link" href="${esc(cover)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"><span class="archive-image-slot"><img data-group-cover data-archive-src="${esc(resourceImages.get(cover)||(s.cover_src?.startsWith('/api/messages/attachments/')?s.cover_src:cover))}" data-original="${esc(cover)}" data-archive-original="${esc(cover)}" alt="主题封面" loading="lazy" referrerpolicy="no-referrer"></span></a>`:mode==='like-cover'?'':'<span class="group-cover-placeholder" aria-label="暂无封面"></span>';}
  const video=s.type==='video',dynamic=s.type==='dynamic';
  const ident=video?(s.bvid||(s.id?'av'+s.id:'')):s.id?(dynamic?'动态 ':'专栏 ')+s.id:'';
  const value=String((video?s.title:s.text||s.title)||'').trim();
@@ -252,7 +252,7 @@ function refreshSubjectNodes(key){
  }
 }
 function bindGroupCovers(root){
- root.querySelectorAll?.('[data-group-cover]').forEach(img=>{img.onerror=()=>{if((typeof window==='undefined'||!window.archiveOffline)&&!img.dataset.originalTried&&img.getAttribute('src')!==img.dataset.original){img.dataset.originalTried='true';img.src=img.dataset.original;}else{const link=img.parentElement;const placeholder=document.createElement?document.createElement('span'):null;if(placeholder){placeholder.className='group-cover-placeholder';placeholder.setAttribute('aria-label','封面加载失败');link.replaceWith(placeholder);}else link.hidden=true;}};});
+ root.querySelectorAll?.('[data-group-cover]').forEach(img=>{img.onerror=()=>{if((typeof window==='undefined'||!window.archiveOffline)&&!img.dataset.originalTried&&img.getAttribute('src')!==img.dataset.original){img.dataset.originalTried='true';img.src=img.dataset.original;}else{const link=img.closest?.('.group-cover-link')||img.parentElement;const placeholder=document.createElement?document.createElement('span'):null;if(placeholder){placeholder.className='group-cover-placeholder';placeholder.setAttribute('aria-label','封面加载失败');link.replaceWith(placeholder);}else link.hidden=true;}};});
  root.querySelectorAll?.('.group-cover-link').forEach(link=>{link.onclick=e=>e.stopPropagation();});
 }
 function queueSubject(key,retry=false){
@@ -354,7 +354,7 @@ function renderLikeNotice(i){
  const people=actors.length?actors.map(u=>actorLink(u)).join('、'):'点赞用户';
  const avatars=actors.length?actors.map(u=>actorLink(u,true)).join(''):avatarPhoto('','默认用户');
  const noun={video:'视频',reply:'评论',dynamic:'动态',album:'动态',article:'专栏'}[target.type]||'内容';
- const right=target.thumb?`<a class="reply-thumbnail" href="${esc(target.thumb.url)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"><img data-reply-thumbnail data-archive-original="${esc(target.thumb.url)}" data-archive-src="${esc(target.thumb.src)}" alt="被赞内容缩略图" loading="lazy" referrerpolicy="no-referrer"></a>`:`<div class="like-topic-excerpt">${esc(target.text)}</div>`;
+ const right=target.thumb?`<a class="reply-thumbnail" href="${esc(target.thumb.url)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"><span class="archive-image-slot"><img data-reply-thumbnail data-archive-original="${esc(target.thumb.url)}" data-archive-src="${esc(target.thumb.src)}" alt="被赞内容缩略图" loading="lazy" referrerpolicy="no-referrer"></span></a>`:`<div class="like-topic-excerpt">${esc(target.text)}</div>`;
  return `<article class="reply-notice notice-likes like-notice" data-like-card="${esc(i.id)}" role="button" tabindex="0" aria-label="查看点赞详情"><div class="like-avatars${actors.length<=1?' like-avatar-single':''}">${avatars}</div><div class="reply-content"><div class="reply-heading"><strong>${people}</strong><span>${actors.length?'等':''}总计 ${esc(count)} 人赞了我的${esc(noun)}</span></div><div class="reply-footer"><time>${esc(replyTime(i.timestamp))}</time><button class="like-open" data-like-open="${esc(i.id)}">点赞详情</button>${notificationLink(i)}${rawAction(i)}</div></div><div class="like-topic">${i.subject&&!target.thumb?subjectHTML(i,'like-cover'):''}${right}</div></article>`;
 }
 function messageScrollRoot(){return typeof ctx==='undefined'?$('workspace-scroll'):ctx.root;}
@@ -373,7 +373,7 @@ function openLikeView(id,origin){
  likeView={id:String(id),uid:state.uid,listTop,origin};
  $('list-pane').hidden=true;$('like-detail').hidden=false;unwatch($('sentinel'));pumpPages();
  const remaining=(item.attachments||[]).filter(a=>!target.thumb||imageURL(a.url)!==target.thumb.url);
- const thumb=target.thumb?`<a class="reply-thumbnail" href="${esc(target.thumb.url)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"><img data-reply-thumbnail data-archive-original="${esc(target.thumb.url)}" data-archive-src="${esc(target.thumb.src)}" alt="被赞内容封面" referrerpolicy="no-referrer"></a>`:'';
+ const thumb=target.thumb?`<a class="reply-thumbnail" href="${esc(target.thumb.url)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"><span class="archive-image-slot"><img data-reply-thumbnail data-archive-original="${esc(target.thumb.url)}" data-archive-src="${esc(target.thumb.src)}" alt="被赞内容封面" referrerpolicy="no-referrer"></span></a>`:'';
  $('like-detail').innerHTML=`<div class="like-breadcrumb"><button data-like-back>收到的赞</button><span aria-hidden="true">›</span><span>点赞详情</span></div><div class="like-subject"><div><div class="like-subject-title">${link(target.url,esc(target.text))||esc(target.text)}</div>${item.subject&&subjectMissing(item.subject)?subjectHTML(item,'topic'):''}<div class="muted like-subject-notice" data-like-notice role="status"></div></div>${thumb}</div>${remaining.length?`<div class="attachments">${attachments(remaining)}</div>`:''}<section class="like-detail-users" data-like-id="${esc(item.id)}" data-order="${state.order}"><div class="like-detail-tools"><label class="search"><input data-like-query aria-label="搜索点赞用户" placeholder="搜索昵称或 UID" value=""></label><select data-like-order aria-label="点赞时间排序"><option value="new"${state.order==='new'?' selected':''}>时间倒序</option><option value="old"${state.order==='old'?' selected':''}>时间正序</option></select></div><div data-like-content></div><div class="like-detail-progress" data-like-pager><span class="muted" data-like-progress role="status"></span><span data-like-error role="alert"></span><button data-like-more>加载更多</button></div><div data-like-sentinel class="load-sentinel" aria-hidden="true"></div></section>`;
  $('like-detail').querySelector('[data-like-back]').onclick=()=>closeLikeView();
  const detail=$('like-detail').querySelector('[data-like-id]'),input=detail.querySelector('[data-like-query]');
@@ -404,7 +404,7 @@ function renderReply(i){
  const quoted=item.type==='reply'?[item.target_reply_content,item.root_reply_content].find(s=>typeof s==='string'&&s.trim()):'';
  const quote=quoted&&quoted.trim()!==body.trim()?`<blockquote class="reply-quote">${esc(quoted)}</blockquote>`:'';
  const thumb=replyThumbnail(i),remaining=(i.attachments||[]).filter(a=>!thumb||imageURL(a.url)!==thumb.url);
- const thumbnail=thumb?`<a class="reply-thumbnail" href="${esc(thumb.url)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"><img data-reply-thumbnail data-archive-original="${esc(thumb.url)}" data-archive-src="${esc(thumb.src)}" alt="通知关联内容缩略图" loading="lazy" referrerpolicy="no-referrer"></a>`:'';
+ const thumbnail=thumb?`<a class="reply-thumbnail" href="${esc(thumb.url)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"><span class="archive-image-slot"><img data-reply-thumbnail data-archive-original="${esc(thumb.url)}" data-archive-src="${esc(thumb.src)}" alt="通知关联内容缩略图" loading="lazy" referrerpolicy="no-referrer"></span></a>`:'';
  return `<article class="reply-notice${thumb?' has-thumbnail':''}"><div class="reply-avatar">${avatarLink}</div><div class="reply-content"><div class="reply-heading"><strong>${userLink}</strong><span>${esc(replyDescription(item.type))}</span>${subjectHTML(i,'heading')}</div><div class="reply-body">${esc(body)}</div>${quote}${i.subject?.type==='video'?'':subjectHTML(i,'body')}${remaining.length?`<div class="attachments">${attachments(remaining)}</div>`:''}<div class="reply-footer"><time>${esc(replyTime(i.timestamp))}</time>${notificationLink(i)}${rawAction(i)}</div></div>${thumbnail}</article>`;
 }
 function bindReplyImages(root){
@@ -424,18 +424,27 @@ function noticeUser(i){
  return {uid,name,photo:uid?link('https://space.bilibili.com/'+uid,photo):photo,label:uid?link('https://space.bilibili.com/'+uid,esc(name)):esc(name)};
 }
 // Avatar metadata is separate from archived messages. Only visible archived senders are queried.
-const resourceImages=new Map(),profiles=new Map(),profileAttempts=new Set(),profileQueue=new Map(),profileObservers=new Map();
+const resourceImages=new Map(),profiles=new Map(),profileAttempts=new Set(),profileQueue=new Map(),profileRequests=new Map(),profileObservers=new Map();
 let profileEpoch=0,profileActive=0,profileRetry=false;
 function disconnectProfileObservers(){
  for(const observer of profileObservers.values())observer.disconnect();
  profileObservers.clear();
 }
+function stopProfileIndicators(task){
+ for(const img of task?.images||[])globalThis.archiveImages?.stopIndicator(img,'profile');
+ task?.images.clear();
+}
+function pauseProfileIndicators(){
+ for(const task of profileQueue.values())stopProfileIndicators(task);
+ for(const task of profileRequests.values())stopProfileIndicators(task);
+}
 function avatarURL(value){
- const url=imageURL(value);return url&&url!==DEFAULT_REPLY_AVATAR&&!/\/member\/noface\.jpg(?:[?#]|$)/i.test(url)?url:'';
+ const url=imageURL(value);return url&&url!==safeURL(DEFAULT_REPLY_AVATAR)&&!/\/member\/noface\.jpg(?:[?#]|$)/i.test(url)?url:'';
 }
 function rememberAvatar(uid,value){
  const key=routeID(String(uid||'')),avatar=avatarURL(value);if(!key||!avatar)return;
- profiles.set(key,{...profiles.get(key),uid:key,avatar_url:avatar});profileQueue.delete(key);
+ profiles.set(key,{...profiles.get(key),uid:key,avatar_url:avatar});
+ stopProfileIndicators(profileQueue.get(key));profileQueue.delete(key);
 }
 function profileAvatar(uid,fallback=''){
  const values=Array.isArray(fallback)?fallback:[fallback];
@@ -445,7 +454,7 @@ function avatarPhoto(uid,name,candidates=[],options={}){
  const key=routeID(String(uid||'')),values=Array.isArray(candidates)?candidates:[candidates],direct=values.map(avatarURL).find(Boolean);
  if(direct)rememberAvatar(key,direct);
  const avatar=profileAvatar(key,values),lookup=options.lookup&&key&&key!==state.uid;
- return `<img${options.className?` class="${esc(options.className)}"`:''} data-reply-avatar data-archive-original="${esc(avatar)}"${key?` data-profile-uid="${esc(key)}"`:''}${direct?' data-avatar-direct="true"':''}${lookup&&avatar===DEFAULT_REPLY_AVATAR?' data-profile-missing="true"':''} data-archive-src="${esc(resourceImages.get(avatar)||avatar)}" alt="${esc(name)}的头像" loading="lazy" referrerpolicy="no-referrer">`;
+ return `<span class="archive-image-slot archive-avatar-slot${options.className==='group-avatar'?' archive-group-avatar-slot':''}"><img${options.className?` class="${esc(options.className)}"`:''} data-reply-avatar data-archive-original="${esc(avatar)}"${key?` data-profile-uid="${esc(key)}"`:''}${direct?' data-avatar-direct="true"':''}${lookup&&avatar===DEFAULT_REPLY_AVATAR?' data-profile-missing="true"':''} data-archive-src="${esc(resourceImages.get(avatar)||avatar)}" alt="${esc(name)}的头像" loading="lazy" referrerpolicy="no-referrer"></span>`;
 }
 function profilePhoto(uid,name,fallback=''){return avatarPhoto(uid,name,fallback,{lookup:true});}
 function profilePriority(uid){return state.session==='user_'+uid||!!currentChat?.items.some(i=>i.sender_uid===uid)?1:0;}
@@ -462,17 +471,27 @@ function applyProfileImages(root){
   delete img.dataset.profileMissing;for(const observer of profileObservers.values())observer.unobserve(img);
  });
 }
-function queueProfile(uid){
+function queueProfile(uid,img=null){
  if(typeof window!=='undefined'&&window.archiveOffline)return;
- if(!routeID(uid)||uid===state.uid||profiles.has(uid)||profileAttempts.has(uid))return;
- profileQueue.set(uid,{uid,account:state.uid,epoch:profileEpoch,retry:profileRetry});pumpProfiles();
+ if(!routeID(uid)||uid===state.uid||profiles.has(uid))return;
+ let task=profileRequests.get(uid)||profileQueue.get(uid);
+ if(!task){
+  if(profileAttempts.has(uid))return;
+  task={uid,account:state.uid,epoch:profileEpoch,retry:profileRetry,images:new Set()};
+  profileQueue.set(uid,task);
+ }
+ if(img){
+  task.images.add(img);
+  globalThis.archiveImages?.startIndicator(img,'profile');
+ }
+ pumpProfiles();
 }
 function pumpProfiles(){
  if(!workspaceActive()||state.type!=='private'||(typeof window!=='undefined'&&window.archiveOffline))return;
  while(profileActive<2&&profileQueue.size){
   const [key,task]=[...profileQueue.entries()].sort((a,b)=>profilePriority(b[0])-profilePriority(a[0]))[0];profileQueue.delete(key);
   if(task.epoch!==profileEpoch||task.account!==state.uid||profileAttempts.has(key))continue;
-  profileAttempts.add(key);++profileActive;
+  profileAttempts.add(key);profileRequests.set(key,task);++profileActive;
   const current=()=>task.epoch===profileEpoch&&task.account===state.uid;
   const params=new URLSearchParams({account_uid:task.account,uid:key,...(task.retry?{retry:'1'}:{})});
   get('/api/messages/profile?'+params).then(data=>{
@@ -483,7 +502,11 @@ function pumpProfiles(){
     applyProfileImages($('sessions'));applyProfileImages($('items'));
     if(currentChat)applyProfileImages(currentChat.element);
    }
-  }).catch(()=>{}).finally(()=>{--profileActive;pumpProfiles();});
+  }).catch(()=>{}).finally(()=>{
+   stopProfileIndicators(task);
+   if(profileRequests.get(key)===task)profileRequests.delete(key);
+   --profileActive;pumpProfiles();
+  });
  }
 }
 function hydrateProfileAvatars(root){
@@ -491,7 +514,7 @@ function hydrateProfileAvatars(root){
  applyProfileImages(root);
  const images=root.querySelectorAll('[data-profile-missing]');if(!images.length)return;
  if(typeof IntersectionObserver==='undefined'){
-  if(workspaceActive())images.forEach(img=>queueProfile(img.dataset.profileUid));return;
+  if(workspaceActive())images.forEach(img=>queueProfile(img.dataset.profileUid,img));return;
  }
  if(!workspaceActive())return;
  const scrollRoot=root===$('sessions')?$('session-pane'):
@@ -502,7 +525,7 @@ function hydrateProfileAvatars(root){
    if(!workspaceActive()||profileObservers.get(scrollRoot)!==observer)return;
    for(const entry of entries)if(entry.isIntersecting&&entry.target.isConnected!==false){
     observer.unobserve(entry.target);
-    queueProfile(entry.target.dataset.profileUid);
+    queueProfile(entry.target.dataset.profileUid,entry.target);
    }
   },{root:scrollRoot,rootMargin:'120px'});
   profileObservers.set(scrollRoot,observer);
@@ -510,7 +533,7 @@ function hydrateProfileAvatars(root){
  images.forEach(img=>observer.observe(img));
 }
 function resetProfiles(keepSaved=false){
- ++profileEpoch;disconnectProfileObservers();profileQueue.clear();profileAttempts.clear();if(!keepSaved){profiles.clear();resourceImages.clear();}profileRetry=keepSaved;
+ ++profileEpoch;disconnectProfileObservers();pauseProfileIndicators();profileQueue.clear();profileRequests.clear();profileAttempts.clear();if(!keepSaved){profiles.clear();resourceImages.clear();}profileRetry=keepSaved;
 }
 function resumeProfiles(){
  hydrateProfileAvatars($('sessions'));hydrateProfileAvatars($('items'));if(currentChat)hydrateProfileAvatars(currentChat.element);pumpProfiles();
@@ -667,7 +690,7 @@ function renderNotice(i){
  const quoted=!privateMessage?[item.target_reply_content,item.root_reply_content].find(s=>typeof s==='string'&&s.trim()&&s.trim()!==content.trim()):'';
  const quote=quoted?`<blockquote class="reply-quote">${esc(quoted)}</blockquote>`:'';
  const thumb=privateMessage?null:replyThumbnail(i),remaining=(i.attachments||[]).filter(a=>!thumb||imageURL(a.url)!==thumb.url);
- const thumbnail=thumb?`<a class="reply-thumbnail" href="${esc(thumb.url)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"><img data-reply-thumbnail data-archive-original="${esc(thumb.url)}" data-archive-src="${esc(thumb.src)}" alt="通知关联内容缩略图" loading="lazy" referrerpolicy="no-referrer"></a>`:'';
+ const thumbnail=thumb?`<a class="reply-thumbnail" href="${esc(thumb.url)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"><span class="archive-image-slot"><img data-reply-thumbnail data-archive-original="${esc(thumb.url)}" data-archive-src="${esc(thumb.src)}" alt="通知关联内容缩略图" loading="lazy" referrerpolicy="no-referrer"></span></a>`:'';
  const session=privateMessage?`<span class="notice-session">${esc(sessionNames.get(i.session)||i.session||names[category])}</span>`:'';
  const stateText=privateMessage&&i.status?`<span class="notice-state">${({1:'已撤回',2:'被系统撤回',50:'图片已失效'}[i.status]||'消息状态 '+esc(i.status))}</span>`:'';
  return `<article class="reply-notice notice-${esc(category)}${own?' mine':''}${thumb?' has-thumbnail':''}"><div class="reply-avatar">${avatar}</div><div class="reply-content"><div class="reply-heading"><strong>${actor}</strong><span>${esc(description)}</span>${session}${subjectHTML(i,'heading')}</div><div class="reply-body">${esc(content)}</div>${quote}${i.subject?.type==='video'?'':subjectHTML(i,'body')}${remaining.length?`<div class="attachments">${attachments(remaining)}</div>`:''}<div class="reply-footer"><time>${esc(replyTime(i.timestamp))}</time>${stateText}${notificationLink(i)}${rawAction(i)}</div></div>${thumbnail}</article>`;
@@ -753,7 +776,7 @@ function renderAttachmentStats(){
  const counts=latestSummary?.attachments_by_type?.[state.type];
  const saved=Number(counts?.saved)||0,pending=Number(counts?.pending)||0;
  status.hidden=!(saved||pending);
- status.title=status.hidden?'':'在桌面应用的消息归档台处理附件';
+ status.title=status.hidden?'':'在桌面应用的消息归档处理附件';
  status.textContent=status.hidden?'':'附件 '+saved+' 已保存 / '+pending+' 待处理';
 }
 function controls(){
@@ -770,7 +793,7 @@ function attachments(list){return (list||[]).map(a=>{
  const url=local||safeURL(a.url);if(!url)return '';
  const image=(a.mime||'').startsWith('image/') || /\.(png|jpe?g|gif|webp|avif|bmp)(?:[?#]|$)/i.test(a.path||a.url);
  const audio=(a.mime||'').startsWith('audio/') || /\.(mp3|m4a|aac|wav|ogg|amr)(?:[?#]|$)/i.test(a.path||a.url);
- const content=image?`<img data-archive-src="${esc(url)}" data-archive-original="${esc(a.url)}" data-archive-placeholder loading="lazy" referrerpolicy="no-referrer" alt="消息图片">`:esc(local?'下载附件':'打开原始附件');
+ const content=image?`<span class="archive-image-slot"><img data-archive-src="${esc(url)}" data-archive-original="${esc(a.url)}" data-archive-placeholder loading="lazy" referrerpolicy="no-referrer" alt="消息图片"></span>`:esc(local?'下载附件':'打开原始附件');
  return `<div>${audio?`<audio controls preload="none" src="${esc(url)}"></audio>`:link(url,content)}${image&&local?`<div>${link(a.url,'原始图片链接')}</div>`:''}${a.error?`<div class="muted">${esc(a.error)}</div>`:''}</div>`;
  }).join('')}
 function likeUserHTML(u){
@@ -936,7 +959,7 @@ function switchCategory(type){
  if(type===state.type)return;
  if(state.type==='private'){
   privateSelection=state.session;privateSessionTop=$('session-pane').scrollTop;
-  disconnectProfileObservers();profileQueue.clear();
+  disconnectProfileObservers();pauseProfileIndicators();profileQueue.clear();
  }
  if(timer!==undefined){clearTimeout(timer);timer=undefined;state.q=$('q').value;}
  state.type=type;state.session=type==='private'?privateSelection:'';
@@ -964,5 +987,5 @@ $('refresh').onclick=refresh;const ready=summary(undefined,{eager:true});
 return {ready,activate(){workspaceVisible=true;resumePages();watchChat();resumeProfiles();return ready.then(async()=>{
  // Check identity without rebuilding a loaded workspace. Only an account change reloads its data.
  const data=await get('/api/messages/summary?identity=1');if(data.account_uid!==state.uid)return summary(undefined,{eager:true,identity:data});
-}).catch(e=>{$('error').textContent=e.message});},deactivate(){rememberChat();workspaceVisible=false;disconnectPageObservers();chatObserver?.disconnect();disconnectProfileObservers();},accountChanged:clearAccount,refresh};
+}).catch(e=>{$('error').textContent=e.message});},deactivate(){rememberChat();workspaceVisible=false;disconnectPageObservers();chatObserver?.disconnect();disconnectProfileObservers();pauseProfileIndicators();},accountChanged:clearAccount,refresh};
 };
