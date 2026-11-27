@@ -556,8 +556,10 @@ mod tests {
         )
         .unwrap();
         assert!(errors.is_empty());
-        assert!(!path.exists());
         let state = store.lock().unwrap();
+        let root = state.root.to_string_lossy();
+        assert_eq!(paging::ng_count_at(&path, 12, &root).unwrap(), 0);
+        assert!(!paging::has_resumable_at(&path, 12, &root, &state.doc).unwrap());
         assert_eq!(state.doc.items[0].like_users.len(), 2);
         assert!(status(&state.doc.items[0]).contains("不一致"));
     }

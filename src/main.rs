@@ -3144,14 +3144,16 @@ mod settings_component_tests {
         let saved=Rc::new(Cell::new(0));let c=saved.clone();ui.on_settings_apply(move||c.set(c.get()+1));
         let weak=ui.as_weak();ui.on_verify_dismiss(move||{let w=weak.upgrade().unwrap();w.set_verify_background(true);w.set_verify_visible(false);});
         click(&ui,1218.,35.);assert_eq!(opened.get(),1);
+        ui.set_settings_visible(true);
+        click(&ui,855.,450.);
+        let save_y=ui.get_settings_dialog_top()+ui.get_settings_dialog_height()-33.;
+        click(&ui,817.,save_y);assert_eq!(saved.get(),1);
         ui.set_verify_visible(true);ui.set_verify_waiting(true);ui.set_verify_secs(60);
         click(&ui,1218.,35.);click(&ui,100.,885.);click(&ui,640.,450.);
         assert_eq!(opened.get(),1);assert_eq!(preview.get(),0);assert!(ui.get_verify_visible());
-        ui.set_settings_visible(true);
-        let save_y=ui.get_settings_dialog_top()+ui.get_settings_dialog_height()-33.;
-        click(&ui,817.,save_y);assert_eq!(saved.get(),0,"settings behind the modal must not receive clicks");
+        click(&ui,817.,save_y);assert_eq!(saved.get(),1,"settings behind the modal must not receive clicks");
         click(&ui,792.,524.);assert!(!ui.get_verify_visible());assert!(ui.get_verify_background());assert!(ui.get_verify_waiting());
-        click(&ui,817.,save_y);assert_eq!(saved.get(),1,"background wait restores page interaction");
+        click(&ui,817.,save_y);assert_eq!(saved.get(),2,"background wait restores page interaction");
         ui.set_settings_visible(false);click(&ui,1218.,35.);assert_eq!(opened.get(),2);
     }
 

@@ -1007,7 +1007,11 @@ mod message_api_tests {
         assert!(response.starts_with("HTTP/1.1 200")); assert!(response.contains("Cache-Control: no-store"));
         assert!(!response.contains("Access-Control-Allow-Origin"));
         let value:serde_json::Value=serde_json::from_str(response.split("\r\n\r\n").nth(1).unwrap()).unwrap();
-        assert_eq!(value["uid"],"18446744073709551614");assert_eq!(value.as_object().unwrap().len(),4);
+        assert_eq!(value, json!({
+            "logged_in": true, "mode": "online", "library_id": "",
+            "uid": "18446744073709551614", "name": "测试用户",
+            "avatar_url": "https://i0.hdslb.com/face.jpg", "avatar_fallback_url": ""
+        }));
         assert!(request(port,"/api/account","https://example.org","GET").starts_with("HTTP/1.1 403"));
         assert!(request(port,"/api/account","","HEAD").ends_with("\r\n\r\n"));
         assert!(request(port,"/api/account","","POST").starts_with("HTTP/1.1 405"));

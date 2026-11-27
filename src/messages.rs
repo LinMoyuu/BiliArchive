@@ -2279,25 +2279,26 @@ mod crawl_tests {
         assert!(path.exists());
         assert_eq!(store.lock().unwrap().doc.sessions.len(), 1);
         let mut downloads = 0;
-        let errors = crawl_at(
+        let root = store.lock().unwrap().root.clone();
+        assert!(!paging::has_resumable_at(
+            &path, 12, &root.to_string_lossy(), &store.lock().unwrap().doc
+        ).unwrap());
+        let report = process_configured_attachments(
             &store,
             12,
-            options,
             &cancel,
-            path.clone(),
-            |_| panic!("completed pages should not be fetched twice"),
+            |item| options.item_enabled(item),
             |_, p| {
                 downloads += 1;
                 std::fs::create_dir_all(p.parent().unwrap())?;
                 std::fs::write(p, b"image")?;
                 Ok(())
             },
-            |_| {},
+            |_, _| Ok(()),
         )
         .unwrap();
-        assert!(errors.is_empty());
+        assert!(report.errors.is_empty());
         assert_eq!(downloads, 1);
-        assert!(!path.exists());
         assert!(
             attachment_file(&store.lock().unwrap(), &digest("https://example.org/a.jpg")).is_some()
         );
@@ -2413,7 +2414,7 @@ mod group_scope_tests {
             task.lists.insert(
                 category,
                 Cursor {
-                    done: true,
+                    done: category != 1,
                     ..Default::default()
                 },
             );
@@ -2427,18 +2428,24 @@ mod group_scope_tests {
             },
         );
         task.save().unwrap();
+        let mut requests = 0;
         let errors = crawl_at(
             &state,
             12,
             options,
             &AtomicBool::new(false),
             path.clone(),
-            |_| panic!("unselected group must not be requested"),
+            |url| {
+                requests += 1;
+                assert!(url.contains("get_sessions") && url.contains("session_type=1&"), "{url}");
+                Ok(json!({"code":0,"data":{"has_more":0,"session_list":[]}}))
+            },
             |_, _| panic!("unselected group attachments must not be downloaded"),
             |_| {},
         )
         .unwrap();
         assert!(errors.is_empty());
+        assert_eq!(requests, 1);
         assert!(!path.exists());
         assert_eq!(state.lock().unwrap().doc.items.len(), 1);
         assert!(root.join("private/group_3.json").exists());
