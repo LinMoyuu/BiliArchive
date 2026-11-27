@@ -851,6 +851,11 @@ pub fn from_messages(
             likes.push(json!({"key":user.key,"user_key":user_key,"user_uid":user.uid,"like_time":seconds(user.like_time),"raw":user.raw}));
         }
         doc.items.push(json!({"id":item.id,"type":item.ty,"session_key":item.session,"subject_key":subject,"sender_uid":item.sender_uid,"actor_name":item.sender_name,"text":item.text,"timestamp":if item.timestamp==0{Value::Null}else{json!(seconds(item.timestamp))},"url":item.url,"native_uri":item.raw["item"]["native_uri"],"status":item.status,"like_count":item.like_count,"like_users":likes,"like_detail":item.like_detail,"resource_ids":resource_ids,"raw":item.raw}));
+        if !item.my_comment_rpid.is_empty() || !item.reply_rpid.is_empty() {
+            doc.items.last_mut().unwrap()["fields"] = json!({
+                "my_comment_rpid":item.my_comment_rpid, "reply_rpid":item.reply_rpid
+            });
+        }
     }
     if let Some(session) = input.sessions.first().filter(|_| input.sessions.len() == 1) {
         doc.source["session_key"] = json!(session.key);
@@ -895,6 +900,21 @@ fn resource_url(doc: &Envelope, key: &Value) -> String {
         .unwrap_or_default()
         .into()
 }
+fn comment_pictures(doc: &Envelope, item: &Value) -> Vec<String> {
+    let mut pictures: Vec<_> = item["resource_ids"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|key| resource_url(doc, key))
+        .filter(|url| !url.is_empty())
+        .collect();
+    for picture in crate::bili::pictures_of(&item["raw"]) {
+        if !pictures.contains(&picture) {
+            pictures.push(picture);
+        }
+    }
+    pictures
+}
 pub fn comments(doc: &Envelope) -> Result<crate::model::ArchiveDoc> {
     doc.validate()?;
     if doc.source["type"] != "comments" {
@@ -937,12 +957,7 @@ pub fn comments(doc: &Envelope) -> Result<crate::model::ArchiveDoc> {
                 value["uname"] = user["name"].clone();
                 value["avatar"] = json!(resource_url(doc, &user["avatar_resource_id"]));
             }
-            value["pictures"] = json!(item["resource_ids"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .map(|key| resource_url(doc, key))
-                .collect::<Vec<_>>());
+            value["pictures"] = json!(comment_pictures(doc, item));
             value["raw"] = item["raw"].clone();
             number_ids(&mut value);
             let mut c: crate::model::Comment = serde_json::from_value(value)?;
@@ -961,12 +976,7 @@ pub fn comments(doc: &Envelope) -> Result<crate::model::ArchiveDoc> {
                     v["uname"] = user["name"].clone();
                     v["avatar"] = json!(resource_url(doc, &user["avatar_resource_id"]));
                 }
-                v["pictures"] = json!(reply["resource_ids"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .map(|key| resource_url(doc, key))
-                    .collect::<Vec<_>>());
+                v["pictures"] = json!(comment_pictures(doc, reply));
                 v["raw"] = reply["raw"].clone();
                 number_ids(&mut v);
                 c.replies.push(serde_json::from_value(v)?);
@@ -1061,6 +1071,8 @@ pub fn messages(doc: &Envelope) -> Result<crate::messages::Doc> {
             like_users: likes,
             like_detail: serde_json::from_value(item["like_detail"].clone()).unwrap_or_default(),
             raw: item["raw"].clone(),
+            my_comment_rpid: crate::my_comments::numeric_id(&item["fields"]["my_comment_rpid"]),
+            reply_rpid: crate::my_comments::numeric_id(&item["fields"]["reply_rpid"]),
         });
     }
     output.exported_at = doc.meta["exported_at"].as_str().unwrap_or_default().into();

@@ -822,22 +822,21 @@ fn location_of(v: &Value) -> String {
         .to_string()
 }
 
-/// 图片评论：content.pictures[].img_src
-fn pictures_of(v: &Value) -> Vec<String> {
+/// 图片评论：content.pictures[].img_src 或 img_url
+pub(crate) fn pictures_of(v: &Value) -> Vec<String> {
     v["content"]["pictures"]
         .as_array()
         .map(|list| {
             list.iter()
                 .filter_map(|p| {
-                    let src = p["img_src"]
-                        .as_str()
-                        .or_else(|| p["img_url"].as_str())
-                        .unwrap_or("");
-                    if src.trim().is_empty() {
-                        None
-                    } else {
-                        Some(https_cover(src))
-                    }
+                    ["img_src", "img_url"].into_iter().find_map(|field| {
+                        let source = p[field].as_str()?.trim();
+                        if let Some(path) = source.strip_prefix("//") {
+                            return (!path.is_empty()).then(|| format!("https://{path}"));
+                        }
+                        (source.starts_with("http://") || source.starts_with("https://"))
+                            .then(|| https_cover(source))
+                    })
                 })
                 .collect()
         })
@@ -1893,7 +1892,14 @@ mod risk_wait_tests {
 }
 
 impl Bili {
-    pub fn message_request_once(&self,url:&str)->Result<Value> { self.get_api(url,"https://message.bilibili.com/") }
+    pub fn message_request_once(&self, url: &str) -> Result<Value> {
+        let referer = if url.starts_with("https://api.bilibili.com/x/v2/reply/detail?") {
+            "https://www.bilibili.com/"
+        } else {
+            "https://message.bilibili.com/"
+        };
+        self.get_api(url, referer)
+    }
     pub fn message_get(&self, url: &str, cancel: &AtomicBool,
         on_wait: &mut dyn FnMut(u64), on_tick: &mut dyn FnMut(u64)) -> Result<Value> {
         retry_with_risk_wait(|| self.get_api(url,"https://message.bilibili.com/").map_err(|e| {

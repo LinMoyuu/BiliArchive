@@ -13,7 +13,6 @@ use std::{
 
 #[path = "messages_paging.rs"]
 mod paging;
-pub use paging::ng_count;
 #[path = "messages_likes.rs"]
 mod likes;
 #[path = "messages_run.rs"]
@@ -129,6 +128,10 @@ pub struct Item {
     #[serde(default)]
     pub like_detail: LikeDetail,
     pub raw: Value,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub my_comment_rpid: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reply_rpid: String,
 }
 #[derive(Clone, Default, Serialize, Deserialize, Debug)]
 pub struct Session {
@@ -594,6 +597,8 @@ pub struct Options {
     pub types: Vec<String>,
     pub from: u64,
     pub to: u64,
+    #[serde(default, alias = "own_comments")]
+    pub interaction_recollect: bool,
 }
 impl Options {
     pub fn parse(types: Vec<String>, from: &str, to: &str) -> Result<Self> {
@@ -601,7 +606,7 @@ impl Options {
             bail!("请至少选择一种消息类型")
         }
         let (from, to) = crate::message_dates::bounds(from, to)?;
-        Ok(Self { types, from, to })
+        Ok(Self { types, from, to, interaction_recollect: false })
     }
     fn session_enabled(&self, session: &Session) -> bool {
         self.types.iter().any(|t| t == session_type(session))
@@ -650,6 +655,8 @@ struct Task {
     sessions: BTreeMap<String, SessionTask>,
     #[serde(default)]
     likes: BTreeMap<String, likes::LikeCursor>,
+    #[serde(default, alias = "pending_own_comments")]
+    pending_my_comments: bool,
 }
 pub fn validate_portable_task(value: Value, uid: u64, library_id: &str) -> Result<()> {
     let task: Task = serde_json::from_value(value).context("消息断点内容无效")?;
@@ -665,6 +672,17 @@ fn task_path(uid: u64) -> Result<PathBuf> {
         .join(format!("{uid}.json"));
     crate::library::migrate_message_task(uid, &path)?;
     Ok(path)
+}
+fn interaction_task_path(uid: u64) -> Result<PathBuf> {
+    Ok(task_path(uid)?.with_extension("interactions.json"))
+}
+pub fn ng_count(uid: u64, root: &str) -> Result<usize> {
+    Ok(paging::ng_count_at(&task_path(uid)?, uid, root)?
+        + paging::ng_count_at(&interaction_task_path(uid)?, uid, root)?)
+}
+pub fn retry_interaction_ng(uid: u64, root: &str) -> Result<bool> {
+    Ok(paging::ng_count_at(&task_path(uid)?, uid, root)? == 0
+        && paging::ng_count_at(&interaction_task_path(uid)?, uid, root)? > 0)
 }
 pub fn clear_task(uid: u64) -> Result<()> {
     let p = task_path(uid)?;
@@ -713,6 +731,7 @@ impl Task {
             lists: BTreeMap::new(),
             sessions: BTreeMap::new(),
             likes: BTreeMap::new(),
+            pending_my_comments: false,
         })
     }
     fn save(&self) -> Result<()> {
@@ -929,6 +948,15 @@ fn feed_item(v: &Value, ty: &str) -> Result<Item> {
         .map(|k| num(&v[k]))
         .find(|n| *n > 0)
         .unwrap_or(0);
+    let comment = &raw["item"];
+    let (my_comment_rpid, reply_rpid) = match (ty, comment["type"].as_str()) {
+        ("replies", Some("reply")) => (
+            crate::my_comments::numeric_id(&comment["target_id"]),
+            crate::my_comments::numeric_id(&comment["source_id"]),
+        ),
+        ("likes", Some("reply")) => (crate::my_comments::numeric_id(&comment["item_id"]), String::new()),
+        _ => Default::default(),
+    };
     Ok(Item {
         like_count: if ty == "likes" {
             num(&v["counts"]).max(num(&v["count"]))
@@ -955,6 +983,8 @@ fn feed_item(v: &Value, ty: &str) -> Result<Item> {
         status: 0,
         attachments,
         raw,
+        my_comment_rpid,
+        reply_rpid,
         ..Default::default()
     })
 }
@@ -1009,7 +1039,7 @@ fn save_group(store: &Store, group: &str) -> Result<()> {
     write_doc(&path, &d)
 }
 #[derive(Debug)]
-struct PersistFailure;
+pub(crate) struct PersistFailure;
 impl std::fmt::Display for PersistFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "消息归档、断点或采集报告写入失败，已停止采集")
@@ -1084,14 +1114,12 @@ pub fn crawl_events_mode(
     let root = store.lock().unwrap().root.clone();
     let mut sleep = |duration| std::thread::sleep(duration);
     let mut ctx = CrawlContext::new(cancel, &mut emit, &mut sleep);
-    let path = if retry_ng {
-        task_path(uid)?.with_extension("ng.json")
-    } else {
-        task_path(uid)?
-    };
+    let task_path = if options.interaction_recollect { interaction_task_path(uid)? } else { task_path(uid)? };
+    let path = if retry_ng { task_path.with_extension("ng.json") } else { task_path };
     ctx.manual_paging = retry_ng;
     ctx.monitor(store);
     ctx.start(&root, uid, &options)?;
+    let interaction_recollect = options.interaction_recollect;
     let result = crawl_run(
         store,
         uid,
@@ -1128,7 +1156,7 @@ pub fn crawl_events_mode(
     };
     let snapshot = store.lock().unwrap().doc.clone();
     let report = ctx.finish(status, &snapshot)?;
-    if (status == "completed" || status == "stopped") && path.exists() {
+    if (status == "completed" || (status == "stopped" && !interaction_recollect)) && path.exists() {
         if let Err(error) = std::fs::remove_file(&path).context(PersistFailure) {
             ctx.issue(format!("清理消息断点失败：{error:#}"))?;
             ctx.finish("failed", &snapshot)?;
@@ -1195,6 +1223,47 @@ fn crawl_at(
         store, uid, options, cancel, path, request, download, &mut ctx,
     )
 }
+fn collect_my_comment_batch(
+    store: &Arc<Mutex<Store>>,
+    task: &mut Task,
+    targets: &[crate::my_comments::Target],
+    cancel: &AtomicBool,
+    request: &mut impl FnMut(&str) -> Result<Value>,
+    ctx: &mut CrawlContext<'_>,
+) -> Result<()> {
+    if !task.pending_my_comments
+        && !targets.iter().any(|target| !ctx.my_comment_attempted.contains(&target.rpid))
+    {
+        return Ok(());
+    }
+    if !task.pending_my_comments {
+        task.pending_my_comments = true;
+        task.save().context(PersistFailure)?;
+    }
+    let root = store.lock().unwrap().root.clone();
+    let mut attempted = std::mem::take(&mut ctx.my_comment_attempted);
+    let result = crate::my_comments::collect(&root, task.uid, targets, &mut attempted, |rpid, url| {
+        ctx.progress(format!("我的评论 · 读取 {rpid}"), "my-comments");
+        let response = ctx.request(request, url)?;
+        ctx.recovered()?;
+        Ok(response)
+    }, || cancel.load(Ordering::SeqCst));
+    ctx.my_comment_attempted = attempted;
+    ctx.my_comment_failures += result?;
+    if !cancel.load(Ordering::SeqCst) {
+        task.pending_my_comments = false;
+        task.save().context(PersistFailure)?;
+    }
+    Ok(())
+}
+
+fn my_comment_backlog(store: &Arc<Mutex<Store>>, options: &Options) -> Vec<crate::my_comments::Target> {
+    store.lock().unwrap().doc.items.iter()
+        .filter(|item| options.item_enabled(item))
+        .filter_map(crate::my_comments::target)
+        .collect()
+}
+
 fn crawl_run(
     store: &Arc<Mutex<Store>>,
     uid: u64,
@@ -1266,6 +1335,9 @@ fn crawl_run(
         task.save().context(PersistFailure)?;
         return Ok(errors);
     }
+    if ctx.my_comment_failures > 0 {
+        errors.push(format!("我的评论有 {} 条详情未获取，已保留通知摘要", ctx.my_comment_failures));
+    }
     if ctx.manual_paging {
         checkpoint_store(store, &task, "all")?;
         return Ok(errors);
@@ -1308,6 +1380,10 @@ fn crawl_pass(
 ) -> Result<Vec<String>> {
     task.summary_bounded |= options.from > 0 || options.to > 0;
     let mut errors = Vec::new();
+    if task.pending_my_comments && !ctx.manual_paging {
+        let items = my_comment_backlog(store, options);
+        collect_my_comment_batch(store, task, &items, cancel, request, ctx)?;
+    }
     for ty in options
         .types
         .iter()
@@ -1360,7 +1436,11 @@ fn crawl_pass(
                         items.push(i)
                     }
                 }
+                let my_comments = items.iter()
+                    .filter(|item| !ctx.my_comment_attempted.contains(&item.my_comment_rpid))
+                    .filter_map(crate::my_comments::target).collect::<Vec<_>>();
                 merge_page(store, uid, vec![], items)?;
+                task.pending_my_comments |= !my_comments.is_empty();
                 if !body["cursor"].is_object()
                     || !(body["cursor"]["is_end"].is_boolean() || body["cursor"]["is_end"].is_u64())
                 {
@@ -1396,6 +1476,7 @@ fn crawl_pass(
                 checkpoint_store(store, task, ty)?;
                 ctx.paging_accepted()?;
                 ctx.recovered()?;
+                collect_my_comment_batch(store, task, &my_comments, cancel, request, ctx)?;
                 let count = store
                     .lock()
                     .unwrap()
@@ -1427,6 +1508,13 @@ fn crawl_pass(
             ctx.issue(format!("{}：{}", label(ty), e))?;
             errors.push(format!("{}：{}", label(ty), e));
         }
+    }
+    if !ctx.manual_paging
+        && !cancel.load(Ordering::SeqCst)
+        && options.types.iter().any(|ty| matches!(ty.as_str(), "replies" | "likes"))
+    {
+        let items = my_comment_backlog(store, options);
+        collect_my_comment_batch(store, task, &items, cancel, request, ctx)?;
     }
     if options.types.iter().any(|t| t == "likes") && !cancel.load(Ordering::SeqCst) {
         errors.extend(likes::collect(store, &options, task, cancel, request, ctx)?);
@@ -2072,6 +2160,53 @@ mod crawl_tests {
             doc: Doc::new(12),
             ..Default::default()
         }))
+    }
+    #[test]
+    fn ordinary_interaction_crawl_saves_my_comment_before_like_users_and_resumes() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = state(temp.path());
+        let root = store.lock().unwrap().root.clone();
+        let path = temp.path().join("task.json");
+        let cancel = AtomicBool::new(false);
+        let options = Options::parse(vec!["replies".into(), "likes".into()], "", "").unwrap();
+        let native = "bilibili://video/42?comment_root_id=123";
+        let detail = json!({"code":0,"data":{"root":{"rpid":123,"member":{"mid":12},
+            "ctime":1700000000,"content":{"pictures":[{"img_url":"https://i0.hdslb.com/photo/123"}]}}}});
+        let errors = crawl_at(&store, 12, options.clone(), &cancel, path.clone(), |url| {
+            if url.contains("/x/msgfeed/reply?") {
+                return Ok(json!({"code":0,"data":{"items":[{"id":2,"reply_time":20,"item":{
+                    "type":"reply","target_id":123,"source_id":456,"native_uri":native
+                }}],"cursor":{"id":2,"time":20,"is_end":true}}}));
+            }
+            assert!(url.contains("/x/v2/reply/detail?"));
+            assert!(load(temp.path(), 12)?.doc.items.iter().any(|item| item.id == "2"));
+            cancel.store(true, Ordering::SeqCst);
+            Ok(detail.clone())
+        }, |_, _| panic!("comment images are saved as links"), |_| {}).unwrap();
+        assert!(errors.is_empty());
+        assert!(paging::has_resumable_at(&path, 12, &root.to_string_lossy(),
+            &store.lock().unwrap().doc).unwrap());
+        assert!(crate::my_comments::read(&root, 12, "123").is_none());
+
+        cancel.store(false, Ordering::SeqCst);
+        let mut detail_calls = 0;
+        let errors = crawl_at(&store, 12, options, &cancel, path.clone(), |url| {
+            if url.contains("/x/v2/reply/detail?") {
+                detail_calls += 1;
+                return Ok(detail.clone());
+            }
+            assert!(crate::my_comments::read(&root, 12, "123").is_some());
+            if url.contains("/x/msgfeed/like_detail?") {
+                return Ok(json!({"code":0,"data":{"items":[],"page":{"is_end":true}}}));
+            }
+            assert!(url.contains("/x/msgfeed/like?"), "{url}");
+            Ok(json!({"code":0,"data":{"total":{"items":[{"id":7,"like_time":30,"item":{
+                "type":"reply","item_id":123,"native_uri":native
+            }}],"cursor":{"is_end":true}}}}))
+        }, |_, _| panic!("comment images are saved as links"), |_| {}).unwrap();
+        assert!(errors.is_empty());
+        assert_eq!(detail_calls, 1);
+        assert!(!path.exists());
     }
     #[test]
     fn pause_resume_and_repeated_cursor_use_temporary_checkpoints() {

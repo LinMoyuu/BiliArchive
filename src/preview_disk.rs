@@ -317,6 +317,9 @@ struct Reads {
     list: Cached<Arc<Value>>,
     summary: Cached<(Value, messages::AttachmentInventory)>,
     messages: Cached<MessageSnapshot>,
+    replies: Cached<MessageSnapshot>,
+    likes: Cached<MessageSnapshot>,
+    my_comments: Mutex<std::collections::BTreeMap<String, (Source, crate::my_comments::Detail)>>,
 }
 
 pub struct View {
@@ -333,6 +336,9 @@ impl View {
                 list: Mutex::new(None),
                 summary: Mutex::new(None),
                 messages: Mutex::new(None),
+                replies: Mutex::new(None),
+                likes: Mutex::new(None),
+                my_comments: Mutex::new(Default::default()),
             },
         }
     }
@@ -686,7 +692,12 @@ impl View {
     pub fn messages(&self, ty: &str, session: &str) -> MessageSnapshot {
         let scope = &self.scope;
         let files = message_sources(scope, ty, session);
-        if let Some((previous, snapshot)) = &*self.reads.messages.lock().unwrap() {
+        let cache = match ty {
+            "replies" => &self.reads.replies,
+            "likes" => &self.reads.likes,
+            _ => &self.reads.messages,
+        };
+        if let Some((previous, snapshot)) = &*cache.lock().unwrap() {
             if *previous == files {
                 return snapshot.clone();
             }
@@ -712,9 +723,26 @@ impl View {
             && ty != "all"
             && files.iter().map(|f| f.size).sum::<u64>() <= MAX_CACHED_SOURCE
         {
-            *self.reads.messages.lock().unwrap() = Some((files, store.clone()));
+            *cache.lock().unwrap() = Some((files, store.clone()));
         }
         store
+    }
+
+    pub fn my_comment(&self, rpid: &str) -> Option<crate::my_comments::Detail> {
+        if !crate::my_comments::valid_id(rpid) { return None; }
+        let root = messages::base(&self.scope.root, self.scope.uid);
+        let read = || crate::my_comments::read(&root, self.scope.uid, rpid);
+        if !self.scope.precache { return read(); }
+        let file = source(crate::my_comments::path(&root, rpid))?;
+        if file.size > 32 * 1024 { return read(); }
+        let mut cache = self.reads.my_comments.lock().unwrap();
+        if let Some((_, detail)) = cache.get(rpid).filter(|(cached, _)| *cached == file) {
+            return Some(detail.clone());
+        }
+        let detail = read()?;
+        if cache.len() >= 512 { cache.clear(); }
+        cache.insert(rpid.into(), (file, detail.clone()));
+        Some(detail)
     }
 }
 

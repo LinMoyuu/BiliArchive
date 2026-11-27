@@ -184,6 +184,7 @@ pub fn run(action: Action, shared: &Arc<Shared>, ui: &Weak<AppWindow>) {
         return;
     }
     let retry_ng = matches!(&action, Action::RetryNg(_));
+    let interaction = matches!(&action, Action::Collect(_, options) if options.interaction_recollect);
     let collecting = matches!(&action, Action::Collect(..) | Action::RetryNg(_));
     set_busy(shared, ui, true);
     let cancellable = collecting || matches!(&action, Action::Attachments(_));
@@ -222,14 +223,13 @@ pub fn run(action: Action, shared: &Arc<Shared>, ui: &Weak<AppWindow>) {
         }
         refresh(shared, ui);
         let action = if retry_ng {
-            Action::Collect(
-                uid,
-                messages::Options::parse(
+            let mut options = messages::Options::parse(
                     messages::VIEW_TYPES.iter().map(|t| t.to_string()).collect(),
                     "",
                     "",
-                )?,
-            )
+                )?;
+            options.interaction_recollect = messages::retry_interaction_ng(uid, &messages::base(&root, uid).to_string_lossy())?;
+            Action::Collect(uid, options)
         } else {
             action
         };
@@ -340,7 +340,7 @@ pub fn run(action: Action, shared: &Arc<Shared>, ui: &Weak<AppWindow>) {
                     if shared.pause_requested.load(Ordering::SeqCst) {
                         "消息采集已暂停，进度与归档已保留".to_owned()
                     } else {
-                        if !retry_ng {
+                        if !retry_ng && !interaction {
                             messages::clear_task(uid)?;
                         }
                         "消息采集已结束，已保存的消息与附件保留".to_owned()
@@ -493,6 +493,7 @@ pub fn run(action: Action, shared: &Arc<Shared>, ui: &Weak<AppWindow>) {
         && !preserve_task
         && shared.cancel.load(Ordering::SeqCst)
         && !shared.pause_requested.load(Ordering::SeqCst)
+        && !interaction
     {
         if let Err(e) = messages::clear_task(uid) {
             push_log(shared, ui, e.to_string());

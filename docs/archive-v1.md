@@ -15,6 +15,7 @@ archive-v1/
     replies.json
     mentions.json
     likes.json
+    my-comments/<rpid>.json
     private/user_<uid>.json
     private/group_<id>.json
   <account_uid>/reports/<run_id>.json      # 每次开始／继续采集的独立报告
@@ -42,6 +43,8 @@ archive-v1/
 评论与楼中楼采用平铺 `items`：`subject_key` 关联稿件，`user_uid` 关联用户，`root_id`、`parent_id` 表达关系。`fields` 保存来源特有的评论属性（置顶、等级、点赞数、IP 属地等），通用字段与引用为读取依据。主题保留来源的内容类型、评论对象 ID 及动态 ID，不能互相代替。
 
 私信项目使用 `session_key`、`sender_uid`、状态及资源引用；原始消息类型、序列号、特殊内容和未知字段仍保留在 `raw` 中。通知保留正式主题引用、原网页地址和原始 native_uri；客户端协议仅在网页展示时转换，不改写源地址。点赞分开记录 `like_count`、用户明细、各自时间与 `like_detail`，接口遍历结束不代表实际名单完整。匿名用户不伪装成某个 UID。
+
+新采集的评论类回复和点赞通过 `fields.my_comment_rpid` 关联完整评论，回复通知另存 `fields.reply_rpid`。详情采用 `bili-my-comment` v1，按账号和评论 ID 保存并随离线资料包迁移。正文只保存一次，对方回复继续保存在回复通知中。网页用 `/api/messages/items?type=my_comments` 分页查询，用 `/api/messages/items?type=replies&my_comment_rpid=<rpid>` 查询某条自己的评论收到的已归档回复。完整评论详情由普通消息采集同步获取。
 
 ## 资源规则
 

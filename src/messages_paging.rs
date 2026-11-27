@@ -446,6 +446,9 @@ pub(super) fn has_resumable_at(path: &Path, uid: u64, root: &str, doc: &Doc) -> 
     if task.library_id != crate::library::id_for_archive(Path::new(root))? {
         return Ok(false);
     }
+    if task.options.interaction_recollect || task.pending_my_comments {
+        return Ok(true);
+    }
     let blocked = |position: Position| -> Result<bool> {
         Ok(registry
             .jobs
@@ -512,8 +515,8 @@ pub(super) fn has_resumable_at(path: &Path, uid: u64, root: &str, doc: &Doc) -> 
     }
     Ok(false)
 }
-pub fn ng_count(uid: u64, root: &str) -> Result<usize> {
-    let registry = load_registry(&task_path(uid)?, uid, root)?;
+pub(super) fn ng_count_at(path: &Path, uid: u64, root: &str) -> Result<usize> {
+    let registry = load_registry(path, uid, root)?;
     Ok(registry.jobs.values().filter(|j| j.status == "ng").count())
 }
 

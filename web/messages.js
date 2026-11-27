@@ -14,7 +14,12 @@ const sessionNames=new Map();let privateSelection='',privateSessionTop=0;
 const groupingModes={replies:'flat',mentions:'flat'};
 const groupSorts={replies:'time',mentions:'time'};
 let likeOrder='new';
-function listOrder(){return state.type==='likes'?likeOrder:state.order;}
+let myCommentOrder='new';
+const myCommentOrders={
+ new:'最近互动倒序',old:'最近互动正序',replies_desc:'回复最多',replies_asc:'回复最少',
+ likes_desc:'被赞最多',likes_asc:'被赞最少',published_desc:'发布时间倒序',published_asc:'发布时间正序'
+};
+function listOrder(){return state.type==='my_comments'?myCommentOrder:state.type==='likes'?likeOrder:state.order;}
 // Page requests share a bounded queue; only automatic work pauses while hidden.
 let workspaceVisible=true,pageRequests=0;const pageQueue=[],activePages=new Set(),autoTargets=new Map(),pageObservers=new Map();
 let stream=newStream();
@@ -155,6 +160,10 @@ function nativeMessageRoute(value){
 function notificationDestination(item){
  const raw=item.raw?.item||{};
  const destination=nativeMessageRoute(raw.native_uri)||publicMessageRoute(item.url)||publicMessageRoute(raw.uri);
+ if(destination&&item.type==='replies'&&item.reply_rpid){
+  const url=focusedComment(destination,routeID(item.reply_rpid));
+  return {url,comment:url.includes('#reply'),label:url.includes('#reply')?'查看评论':'查看主题'};
+ }
  return destination?{...destination,label:destination.comment?'查看评论':'查看主题'}:null;
 }
 function notificationLink(item){
@@ -323,10 +332,14 @@ function likeDestination(i){
  const native=likeNativeDestination(item.native_uri);
  const destination=native.destination||publicMessageRoute(i.url)||publicMessageRoute(item.uri);
  if(!destination)return '';
+ if(i.my_comment_rpid)return focusedComment(destination,routeID(i.my_comment_rpid));
  // Existing valid anchors outrank the fallback item ID. Unsafe numeric IDs cannot be repaired.
  const saved=/^#reply([1-9]\d*)$/.exec(new URL(destination.url).hash)?.[1]||'';
  const itemID=typeof item.item_id==='number'?(Number.isSafeInteger(item.item_id)&&item.item_id>0?String(item.item_id):''):routeID(item.item_id);
  const comment=native.comment||saved||itemID;
+ return focusedComment(destination,comment);
+}
+function focusedComment(destination,comment){
  if(!comment)return destination.url;
  const url=new URL(destination.url),dynamic=/^\/(?:opus|dynamic)\/[1-9]\d*\/?$/.test(url.pathname)||url.hostname==='t.bilibili.com'&&/^\/[1-9]\d*\/?$/.test(url.pathname);
  const supported=dynamic||/^\/video\/(?:BV[0-9A-Za-z]+|av[1-9]\d*)\/?$/.test(url.pathname)||/^\/read\/cv[1-9]\d*\/?$/.test(url.pathname);
@@ -337,7 +350,7 @@ function likeDestination(i){
 }
 function likeTarget(i){
  const item=i.raw?.item||{};
- return {type:item.type||'',text:[item.title,item.target_reply_content,item.root_reply_content,item.source_content,i.text].find(s=>typeof s==='string'&&s.trim())||'主题内容暂不可用',url:likeDestination(i),thumb:replyThumbnail(i)};
+ return {type:item.type||'',text:[i.my_comment?.text,item.title,item.target_reply_content,item.root_reply_content,item.source_content,i.text].find(s=>typeof s==='string'&&s.trim())||'主题内容暂不可用',url:likeDestination(i),thumb:replyThumbnail(i)};
 }
 function likeActors(i){
  const raw=i.raw||{},list=Array.isArray(raw.users)?raw.users:raw.user?[raw.user]:[];
@@ -401,8 +414,10 @@ function renderReply(i){
  const avatarLink=uid?link('https://space.bilibili.com/'+uid,avatarHTML):avatarHTML;
  const userLink=uid?link('https://space.bilibili.com/'+uid,esc(name)):esc(name);
  const body=typeof item.source_content==='string'&&item.source_content.trim()?item.source_content:String(i.text||'');
- const quoted=item.type==='reply'?[item.target_reply_content,item.root_reply_content].find(s=>typeof s==='string'&&s.trim()):'';
- const quote=quoted&&quoted.trim()!==body.trim()?`<blockquote class="reply-quote">${esc(quoted)}</blockquote>`:'';
+ const pictures=item.type==='reply'?myCommentImages(i.my_comment):'';
+ const excerpt=item.type==='reply'?(pictures||i.my_comment?.text?.trim()?i.my_comment?.text:i.comment_excerpt||item.target_reply_content):'';
+ const quoteText=typeof excerpt==='string'&&excerpt.trim()!==body.trim()?esc(excerpt):'';
+ const quote=quoteText||pictures?`<blockquote class="reply-quote">${quoteText}${pictures}</blockquote>`:'';
  const thumb=replyThumbnail(i),remaining=(i.attachments||[]).filter(a=>!thumb||imageURL(a.url)!==thumb.url);
  const thumbnail=thumb?`<a class="reply-thumbnail" href="${esc(thumb.url)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"><span class="archive-image-slot"><img data-reply-thumbnail data-archive-original="${esc(thumb.url)}" data-archive-src="${esc(thumb.src)}" alt="通知关联内容缩略图" loading="lazy" referrerpolicy="no-referrer"></span></a>`:'';
  return `<article class="reply-notice${thumb?' has-thumbnail':''}"><div class="reply-avatar">${avatarLink}</div><div class="reply-content"><div class="reply-heading"><strong>${userLink}</strong><span>${esc(replyDescription(item.type))}</span>${subjectHTML(i,'heading')}</div><div class="reply-body">${esc(body)}</div>${quote}${i.subject?.type==='video'?'':subjectHTML(i,'body')}${remaining.length?`<div class="attachments">${attachments(remaining)}</div>`:''}<div class="reply-footer"><time>${esc(replyTime(i.timestamp))}</time>${notificationLink(i)}${rawAction(i)}</div></div>${thumbnail}</article>`;
@@ -695,7 +710,48 @@ function renderNotice(i){
  const stateText=privateMessage&&i.status?`<span class="notice-state">${({1:'已撤回',2:'被系统撤回',50:'图片已失效'}[i.status]||'消息状态 '+esc(i.status))}</span>`:'';
  return `<article class="reply-notice notice-${esc(category)}${own?' mine':''}${thumb?' has-thumbnail':''}"><div class="reply-avatar">${avatar}</div><div class="reply-content"><div class="reply-heading"><strong>${actor}</strong><span>${esc(description)}</span>${session}${subjectHTML(i,'heading')}</div><div class="reply-body">${esc(content)}</div>${quote}${i.subject?.type==='video'?'':subjectHTML(i,'body')}${remaining.length?`<div class="attachments">${attachments(remaining)}</div>`:''}<div class="reply-footer"><time>${esc(replyTime(i.timestamp))}</time>${stateText}${notificationLink(i)}${rawAction(i)}</div></div>${thumbnail}</article>`;
 }
-function renderItem(i){return i.type==='replies'?renderReply(i):i.type==='likes'?renderLikeNotice(i):renderNotice(i)}
+function myCommentImages(detail){
+ const pictures=(detail?.images||[]).map(imageURL).filter(Boolean).map(url=>({url}));
+ return pictures.length?`<div class="attachments">${attachments(pictures,true)}</div>`:'';
+}
+function renderMyComment(i){
+ const raw=i.raw?.item||{},detail=i.my_comment;
+ const location=likeNativeDestination(raw.native_uri).destination||publicMessageRoute(i.url)||publicMessageRoute(raw.uri);
+ const target=location?focusedComment(location,routeID(i.id)):'';
+ const source=(i.sources||[]).map(type=>type==='replies'?'回复':'点赞').join('、');
+ const pictures=myCommentImages(detail);
+ const replies=i.reply_total!=null?`<span>回复 ${esc(i.reply_total)}</span>`:`<span>已归档回复 ${esc(i.reply_count||0)}</span>`;
+ const likes=i.like_count!=null?`<span>${i.like_count_from_notification?'通知点赞':'被赞'} ${esc(i.like_count)}</span>`:'';
+ const opened=i.reply_count?`<details data-my-comment="${esc(i.id)}"><summary>已归档的回复（${esc(i.reply_count)}）</summary><div data-my-comment-replies></div><small data-my-comment-error role="status"></small><button type="button" data-my-comment-more>加载回复</button></details>`:'';
+ const text=i.text||(pictures?'':'评论正文未归档');
+ return `<article class="reply-notice my-comment"><div class="reply-content"><div class="reply-heading"><span>${esc(source)}</span>${detail?'':'<span>仅有通知摘要</span>'}${subjectHTML(i,'heading')}</div><div class="reply-body">${esc(text)}</div>${pictures}<div class="reply-footer"><time>最近互动 ${esc(replyTime(i.timestamp))}</time>${detail?.timestamp?`<time>发布于 ${esc(replyTime(detail.timestamp))}</time>`:''}${replies}${likes}${link(target,target.includes('#reply')?'查看评论':'查看主题')}</div>${opened}</div></article>`;
+}
+function renderItem(i){return i.type==='replies'?renderReply(i):i.type==='likes'?renderLikeNotice(i):i.type==='my_comments'?renderMyComment(i):renderNotice(i)}
+function bindMyComments(root){
+ for(const detail of root.querySelectorAll('[data-my-comment]')){
+  if(detail.ontoggle)continue;
+  const box=detail.querySelector('[data-my-comment-replies]'),button=detail.querySelector('[data-my-comment-more]'),error=detail.querySelector('[data-my-comment-error]');
+  const uid=state.uid,epoch=state.request;
+  let offset=0,busy=false,done=false;
+  const current=()=>state.uid===uid&&state.request===epoch&&detail.isConnected!==false;
+  const load=async()=>{
+   if(!current()||busy||done)return;
+   busy=true;button.disabled=true;error.textContent='';
+   try{
+    const params=new URLSearchParams({type:'replies',my_comment_rpid:detail.dataset.myComment,order:'old',offset:String(offset),limit:'50'});
+    const data=await pageRequest('/api/messages/items?'+params,current,false);
+    if(!data||!current()||data.account_uid!==uid)return;
+    const items=data.items||[];
+    appendHTML(box,items.map(renderReply).join(''));bindReplyImages(box);bindRawActions(box);
+    offset+=items.length;done=!items.length||offset>=data.total;
+    button.hidden=done;button.textContent='加载更多回复';
+   }catch(e){if(current()){error.textContent=e.message;button.textContent='重试加载';}}
+   finally{busy=false;if(current())button.disabled=false;}
+  };
+  detail.ontoggle=()=>{if(detail.open&&!offset)load();};
+  button.onclick=load;
+ }
+}
 
 function pagination(){
  const unit=grouping()==='flat'?'条':'项';
@@ -767,7 +823,7 @@ function rememberFirstPage(url,data){
  firstPages.set(url,{data,expires:Date.now()+30000});
  if(firstPages.size>8)firstPages.delete(firstPages.keys().next().value);
 }
-function clearAccount(uid){latestSummary=null;renderedSessions=null;firstPages.clear();likeOrder='new';privateSelection='';privateSessionTop=0;resetProfiles();resetChats();sessionInfo.clear();closeLikeView(false);likeCards.clear();$('like-detail').innerHTML='';sessionNames.clear();resetSubjects();expectedUid=String(uid||'');++summaryRequest;++state.request;invalidateGroups();groupingModes.replies='flat';groupingModes.mentions='flat';groupSorts.replies=groupSorts.mentions='time';$('header-stats').innerHTML='';state.uid='';state.session='';state.offset=0;state.total=0;$('items').innerHTML='';$('sessions').innerHTML='';renderAttachmentStats();$('error').textContent='';$('page').textContent='';$('more').disabled=true;return summary();}
+function clearAccount(uid){latestSummary=null;renderedSessions=null;firstPages.clear();likeOrder='new';myCommentOrder='new';privateSelection='';privateSessionTop=0;resetProfiles();resetChats();sessionInfo.clear();closeLikeView(false);likeCards.clear();$('like-detail').innerHTML='';sessionNames.clear();resetSubjects();expectedUid=String(uid||'');++summaryRequest;++state.request;invalidateGroups();groupingModes.replies='flat';groupingModes.mentions='flat';groupSorts.replies=groupSorts.mentions='time';$('header-stats').innerHTML='';state.uid='';state.session='';state.offset=0;state.total=0;$('items').innerHTML='';$('sessions').innerHTML='';renderAttachmentStats();$('error').textContent='';$('page').textContent='';$('more').disabled=true;return summary();}
 function safeURL(value){try{const u=new URL(value,location.href);return ['http:','https:'].includes(u.protocol)?u.href:''}catch{return ''}}
 function link(url,title){const href=safeURL(url);return href?`<a href="${esc(href)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">${title}</a>`:''}
 async function get(url,signal){const response=await fetch(url,{signal,cache:'no-store'});if(!response.ok)throw new Error(`读取失败（${response.status}）`);return response.json()}
@@ -781,17 +837,20 @@ function renderAttachmentStats(){
 }
 function controls(){
  renderAttachmentStats();
+ $('my-comment-note').hidden=state.type!=='my_comments';
  $('session-pane').hidden=state.type!=='private';messageScrollRoot().classList?.[state.type==='private'?'add':'remove']('private-active');
 document.querySelectorAll('#types button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.type===state.type)));$('grouping').hidden=!['replies','mentions'].includes(state.type);document.querySelectorAll('#grouping button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.group===grouping())));
  if(state.type==='private')$('sessions').querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.session===(privateSearch()?'':state.session))));
  const noun=state.type==='replies'?'回复次数':'@次数';
- $('order').innerHTML='<option value="new">时间倒序</option><option value="old">时间正序</option>'+(state.type==='likes'?'<option value="likes_desc">点赞最多</option><option value="likes_asc">点赞最少</option>':grouping()==='flat'?'':`<option value="count_desc">${noun}最多</option><option value="count_asc">${noun}最少</option>`);
- $('order').value=state.type==='likes'?likeOrder:ranking()==='time'?state.order:ranking();$('order').hidden=privateChat();if(typeof ctx!=='undefined')ctx.scrollChanged?.();
+ $('order').innerHTML=state.type==='my_comments'
+  ?Object.entries(myCommentOrders).map(([value,label])=>`<option value="${value}">${label}</option>`).join('')
+  :'<option value="new">时间倒序</option><option value="old">时间正序</option>'+(state.type==='likes'?'<option value="likes_desc">点赞最多</option><option value="likes_asc">点赞最少</option>':grouping()==='flat'?'':`<option value="count_desc">${noun}最多</option><option value="count_asc">${noun}最少</option>`);
+ $('order').value=ranking()==='time'?listOrder():ranking();$('order').hidden=privateChat();if(typeof ctx!=='undefined')ctx.scrollChanged?.();
 }
-function attachments(list){return (list||[]).map(a=>{
+function attachments(list,knownImages=false){return (list||[]).map(a=>{
  const local=a.path && /^[a-f0-9]{32}$/.test(a.id)?`/api/messages/attachments/${a.id}`:'';
  const url=local||safeURL(a.url);if(!url)return '';
- const image=(a.mime||'').startsWith('image/') || /\.(png|jpe?g|gif|webp|avif|bmp)(?:[?#]|$)/i.test(a.path||a.url);
+ const image=knownImages || (a.mime||'').startsWith('image/') || /\.(png|jpe?g|gif|webp|avif|bmp)(?:[?#]|$)/i.test(a.path||a.url);
  const audio=(a.mime||'').startsWith('audio/') || /\.(mp3|m4a|aac|wav|ogg|amr)(?:[?#]|$)/i.test(a.path||a.url);
  const content=image?`<span class="archive-image-slot"><img data-archive-src="${esc(url)}" data-archive-original="${esc(a.url)}" data-archive-placeholder loading="lazy" referrerpolicy="no-referrer" alt="消息图片"></span>`:esc(local?'下载附件':'打开原始附件');
  return `<div>${audio?`<audio controls preload="none" src="${esc(url)}"></audio>`:link(url,content)}${image&&local?`<div>${link(a.url,'原始图片链接')}</div>`:''}${a.error?`<div class="muted">${esc(a.error)}</div>`:''}</div>`;
@@ -842,7 +901,7 @@ async function loadMoreLikeUsers(detail,automatic=false){
 function bindLikeDetails(){
  hydrateSubjects();bindReplyImages($('items'));bindLikeCards($('items'));
 }
-function render(items,append=false){if(!append){$('items').innerHTML='';likeCards.clear();}appendHTML($('items'),items.map(renderItem).join(''));bindLikeDetails();}
+function render(items,append=false){if(!append){$('items').innerHTML='';likeCards.clear();}appendHTML($('items'),items.map(renderItem).join(''));bindLikeDetails();if(state.type==='my_comments')bindMyComments($('items'));}
 async function loadMore(automatic=false,reuseFirstPage=false){
  const batch=stream,request=state.request,uid=state.uid,mode=grouping();
  const current=()=>stream===batch&&batch.request===state.request&&request===state.request&&uid===state.uid;
@@ -854,7 +913,7 @@ async function loadMore(automatic=false,reuseFirstPage=false){
   const params=new URLSearchParams({type:requestType(),include_groups:state.type==='private'&&(!state.session||privateSearch())?'1':'0',session:privateSearch()?'':state.session,q:state.q,order:listOrder(),offset:String(batch.next),limit:String(state.limit)});
   if(mode!=='flat'){params.set('group_by',mode);params.set('sort',ranking());}
   const url=(mode==='flat'?'/api/messages/items?':'/api/messages/groups?')+params;
-  const saved=first&&reuseFirstPage?firstPages.get(url):null;
+  const saved=first&&reuseFirstPage&&state.type!=='my_comments'?firstPages.get(url):null;
   const cached=saved&&saved.expires>Date.now()?saved.data:null;
   const d=cached??await pageRequest(url,()=>current()&&(!automatic||!likeView),automatic);
   if(!d||!current())return;
@@ -869,7 +928,7 @@ async function loadMore(automatic=false,reuseFirstPage=false){
   if(mode==='flat')render(fresh,true);else renderGroups(fresh,d.total_items,true);
   if(first&&top>0)scroll.scrollTop=top;
   batch.loaded+=fresh.length;batch.next+=rows.length;state.offset=batch.next;batch.done=!rows.length||batch.next>=d.total;
-  if(batch.done&&!batch.loaded)$('items').innerHTML='<p class="muted">没有符合条件的本地消息。</p>';
+  if(batch.done&&!batch.loaded)appendHTML($('items'),'<p class="muted">没有符合条件的本地消息。</p>');
  }catch(e){if(current()){batch.error=e.message;$(first?'error':'page-error').textContent=e.message;}}
  finally{finish?.();batch.busy=false;if(current())pagination();}
 }
@@ -880,7 +939,7 @@ function load(reuseFirstPage=false, retain=false){if(!retain||!privateChat())hid
 
 function adoptMessageAccount(uid){
  if(state.uid===uid)return false;
- likeOrder='new';privateSelection='';privateSessionTop=0;
+ likeOrder='new';myCommentOrder='new';privateSelection='';privateSessionTop=0;
  latestSummary=null;renderedSessions=null;firstPages.clear();
  resetProfiles();resetChats();sessionInfo.clear();sessionNames.clear();
  closeLikeView(false);likeCards.clear();$('like-detail').innerHTML='';
@@ -956,12 +1015,18 @@ function showSessions(restoreScroll){
 }
 
 function switchCategory(type){
- if(type===state.type)return;
+ const returningToRoot=type===state.type;
  if(state.type==='private'){
-  privateSelection=state.session;privateSessionTop=$('session-pane').scrollTop;
+  privateSelection=returningToRoot?'':state.session;
+  privateSessionTop=returningToRoot?0:$('session-pane').scrollTop;
   disconnectProfileObservers();pauseProfileIndicators();profileQueue.clear();
  }
  if(timer!==undefined){clearTimeout(timer);timer=undefined;state.q=$('q').value;}
+ if(returningToRoot){
+  state.q='';$('q').value='';
+  messageScrollRoot().scrollTop=0;
+  if(type==='private')$('conversation-pane').scrollTop=0;
+ }
  state.type=type;state.session=type==='private'?privateSelection:'';
  if(latestSummary||stream.request===state.request)return load(true);
  hideChat();controls();
@@ -973,7 +1038,12 @@ document.querySelectorAll('#grouping button').forEach(b=>b.onclick=()=>{if(group
 let timer;$('q').oninput=()=>{clearTimeout(timer);timer=setTimeout(()=>{timer=undefined;state.q=$('q').value;state.offset=0;load(false,true)},200)};
 $('order').onchange=()=>{
  const value=$('order').value;
- if(state.type==='likes'){if(!['new','old','likes_desc','likes_asc'].includes(value)){controls();return;}likeOrder=value;}
+ if(state.type==='my_comments'){
+  if(!Object.hasOwn(myCommentOrders,value)){controls();return;}
+  myCommentOrder=value;
+  if(timer!==undefined){clearTimeout(timer);timer=undefined;state.q=$('q').value;}
+ }
+ else if(state.type==='likes'){if(!['new','old','likes_desc','likes_asc'].includes(value)){controls();return;}likeOrder=value;}
  else if(['new','old'].includes(value)){state.order=value;if(grouping()!=='flat')groupSorts[state.type]='time';}
  else if(grouping()!=='flat'&&['count_desc','count_asc'].includes(value))groupSorts[state.type]=value;
  else{controls();return;}

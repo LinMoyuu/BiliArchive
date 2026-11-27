@@ -22,10 +22,10 @@
   else routes[key]=new URL(location.href);
   for(const name of Object.keys(roots)){roots[name].hidden=name!==key;heads[name].hidden=name!==key;}
   window.archiveImages?.resume(roots[key]);
-  const name=key==='comments'?'评论聚合':'消息归档';document.title=name+' · BiliArchive';
+  const name=key==='comments'?'稿件评论':'消息归档';document.title=name+' · BiliArchive';
   document.getElementById('product-name').textContent=name;
   document.getElementById('product-icon').textContent=key==='comments'?'评':'信';
-  document.getElementById('product-subtitle').textContent=key==='comments'?'稿件评论 · 收集与归档':'私信与互动通知 · 收集与归档';
+  document.getElementById('product-subtitle').textContent=key==='comments'?'他人在我的稿件下发表的评论':'私信与互动通知 · 收集与归档';
   Object.entries(choices).forEach(([value,item])=>item.setAttribute('aria-checked',String(value===key)));
   closeMenu();updateTopButton();
   let pending;

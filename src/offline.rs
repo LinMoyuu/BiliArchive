@@ -446,7 +446,10 @@ fn state_allowed(name: &str, uid: u64) -> bool {
     let u = uid.to_string();
     name == format!("checkpoints/messages/v2/{u}.json")
         || name == format!("checkpoints/messages/v2/{u}.ng.json")
+        || name == format!("checkpoints/messages/v2/{u}.interactions.json")
+        || name == format!("checkpoints/messages/v2/{u}.interactions.ng.json")
         || name == format!("ng/messages/v1/{u}.paging.json")
+        || name == format!("ng/messages/v1/{u}.interactions.paging.json")
         || name.starts_with(&format!("checkpoints/{u}/")) && name.ends_with(".json")
 }
 fn validate_state(name: &str, value: &Value, uid: u64, library_id: &str) -> Result<()> {
@@ -579,6 +582,7 @@ fn import(paths: Vec<PathBuf>, shared: &Arc<Shared>, ui: &Weak<AppWindow>) -> Re
     set_foot(ui, "导入资料包：正在校验并合并归档…".into());
     let mut accounts = BTreeMap::new();
     let mut reports = Vec::new();
+    let mut my_comments = Vec::new();
     let mut count = 0;
     let mut resource_copies = archive::ResourceCopies::default();
     let mut message_files: BTreeMap<u64, Vec<messages::Doc>> = BTreeMap::new();
@@ -619,6 +623,18 @@ fn import(paths: Vec<PathBuf>, shared: &Arc<Shared>, ui: &Weak<AppWindow>) -> Re
                     );
                 }
                 reports.push((uid, path.clone()));
+                continue;
+            }
+            if parsed["format"].as_str().is_some_and(crate::my_comments::Detail::recognizes_format) {
+                let detail: crate::my_comments::Detail = serde_json::from_value(parsed)?;
+                detail.validate()?;
+                if let Some(root) = &staged_archive {
+                    let expected = crate::my_comments::path(
+                        &root.join(detail.account_uid.to_string()).join("messages"), &detail.rpid,
+                    );
+                    anyhow::ensure!(path == &expected, "我的评论归档目录与账号不匹配");
+                }
+                my_comments.push(detail);
                 continue;
             }
             if parsed["format"] != "bili-archive" {
@@ -776,6 +792,15 @@ fn import(paths: Vec<PathBuf>, shared: &Arc<Shared>, ui: &Weak<AppWindow>) -> Re
             }
         }
         save_imported_report(&dir, &path)?;
+    }
+    for detail in my_comments {
+        let uid = detail.account_uid.parse::<u64>()?;
+        anyhow::ensure!(accounts.contains_key(&uid), "资料包中的我的评论没有对应账号");
+        let root = messages::base(&target, uid);
+        if crate::my_comments::read(&root, uid, &detail.rpid).is_none() {
+            crate::my_comments::write(&root, &detail)?;
+        }
+        count += 1;
     }
     let first = accounts.values().next().context("资料包没有账号")?;
     let mut first_messages = None;
@@ -1018,6 +1043,7 @@ fn export_bundle(dest: &Path, shared: &Arc<Shared>) -> Result<()> {
     let archive_root = archive::root(&root);
     let account_root = archive_root.join(&scope);
     let report_dir = account_root.join("reports");
+    let my_comment_dir = account_root.join("messages/my-comments");
     let mut archives = 0;
     for file in account_bundle_files(&account_root)? {
         if file.extension().is_none_or(|s| s != "json") {
@@ -1031,6 +1057,12 @@ fn export_bundle(dest: &Path, shared: &Arc<Shared>) -> Result<()> {
             let report = serde_json::from_slice(&bytes)
                 .with_context(|| format!("采集报告损坏：{}", file.display()))?;
             anyhow::ensure!(collection_report_uid(&report)? == uid, "采集报告账号不匹配");
+        } else if file.parent() == Some(my_comment_dir.as_path()) {
+            let detail: crate::my_comments::Detail = serde_json::from_slice(&bytes)?;
+            detail.validate()?;
+            anyhow::ensure!(detail.account_uid == uid.to_string() && file == crate::my_comments::path(&account_root.join("messages"), &detail.rpid),
+                "导出的我的评论归档归属不匹配");
+            archives += 1;
         } else {
             let env = archive::Envelope::parse(&bytes)
                 .with_context(|| format!("账号归档损坏，资料包未导出：{}", file.display()))?;

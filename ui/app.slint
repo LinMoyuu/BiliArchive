@@ -225,58 +225,10 @@ component TextAction inherits Rectangle {
     hit := TouchArea { enabled: root.enabled; mouse-cursor: pointer; clicked => { root.clicked(); } }
 }
 
-component HubYearBox inherits Btn {
-    in property <int> value;
-    callback edited(int);
-
-    text: root.value + " 年";
-    clicked => { years.show(); }
-    years := PopupWindow {
-        x: 0px; y: root.height + 4px; width: root.width; height: 228px;
-        close-policy: close-on-click-outside; forward-focus: year-focus;
-        year-focus := FocusScope {
-            property <int> highlighted: root.value;
-            init => { self.highlight(root.value); }
-            function highlight(value: int) {
-                self.highlighted = min(9999, max(1970, value));
-                list.content-y = -min((8030 * 28px) - list.height, max(0px, (self.highlighted - 1970) * 28px - 84px));
-            }
-            key-pressed(event) => {
-                if event.text == Key.Escape { years.close(); return accept; }
-                if event.text == Key.UpArrow || event.text == Key.DownArrow {
-                    self.highlight(self.highlighted + (event.text == Key.UpArrow ? -1 : 1));
-                    return accept;
-                }
-                if event.text == Key.PageUp || event.text == Key.PageDown {
-                    self.highlight(self.highlighted + (event.text == Key.PageUp ? -8 : 8));
-                    return accept;
-                }
-                if event.text == Key.Return || event.text == Key.Space {
-                    let selected = self.highlighted;
-                    years.close();
-                    root.edited(selected);
-                    return accept;
-                }
-                return reject;
-            }
-            Rectangle {
-                width: parent.width; height: parent.height; background: Theme.card;
-                border-radius: 9px; border-width: 1px; border-color: Theme.border;
-                list := ListView {
-                    x: 4px; y: 2px; width: parent.width - 8px; height: parent.height - 4px;
-                    horizontal-scrollbar-policy: always-off;
-                    for row in 8030 : Rectangle {
-                        height: 28px;
-                        Btn {
-                            width: parent.width; y: 1px; small: true;
-                            text: (1970 + row) + " 年"; selected: year-focus.highlighted == 1970 + row;
-                            clicked => { years.close(); root.edited(1970 + row); }
-                        }
-                    }
-                }
-            }
-        }
-    }
+export global CalendarLimits {
+    out property <int> first-year: 2009;
+    out property <int> last-year: 2077;
+    out property <int> year-count: last-year - first-year + 1;
 }
 
 component HubMonthBox inherits Rectangle {
@@ -462,8 +414,18 @@ component MessageDateField inherits Rectangle {
         calendar-focus := FocusScope {
             width: parent.width; height: parent.height;
             property <int> tracked-month: root.calendar-month;
+            property <bool> year-open: false;
             changed tracked-month => { months.current-index = root.calendar-month - 1; }
+            function close-years() {
+                self.year-open = false;
+                year-button.focus();
+            }
+            function select-year(year: int) {
+                root.month-selected(year, root.calendar-month);
+                self.close-years();
+            }
             key-pressed(event) => {
+                if self.year-open && event.text == Key.Escape { self.close-years(); return accept; }
                 if event.text == Key.Escape { dropdown.close(); return accept; }
                 if event.text == Key.Return && self.has-focus {
                     if root.calendar-accepted() { dropdown.close(); }
@@ -475,10 +437,18 @@ component MessageDateField inherits Rectangle {
                 width: parent.width; height: parent.height; background: white; border-radius: 8px; border-width: 1px; border-color: Theme.border;
                 HorizontalLayout {
                     x: 10px; y: 10px; width: 320px; height: 32px; spacing: 6px;
-                    Btn { text: "上个月"; triangle: -1; width: 32px; clicked => { root.month-shift(-1); } }
-                    HubYearBox { value: root.calendar-year; width: 136px; edited(value) => { root.month-selected(value, root.calendar-month); } }
+                    Btn { text: "上个月"; triangle: -1; width: 32px; enabled: root.calendar-year > CalendarLimits.first-year || root.calendar-month > 1; clicked => { root.month-shift(-1); } }
+                    year-button := Btn {
+                        width: 136px;
+                        text: root.calendar-year + " 年";
+                        clicked => {
+                            calendar-focus.year-open = true;
+                            year-focus.highlight(root.calendar-year);
+                            year-focus.focus();
+                        }
+                    }
                     months := HubMonthBox { width: 102px; model: ["1月","2月","3月","4月","5月","6月","7月","8月","9月","10月","11月","12月"]; current-index: root.calendar-month - 1; selected(value) => { root.month-selected(root.calendar-year, months.current-index + 1); } }
-                    Btn { text: "下个月"; triangle: 1; width: 32px; clicked => { root.month-shift(1); } }
+                    Btn { text: "下个月"; triangle: 1; width: 32px; enabled: root.calendar-year < CalendarLimits.last-year || root.calendar-month < 12; clicked => { root.month-shift(1); } }
                 }
                 Rectangle {
                     x: 10px; y: 46px; width: 320px; height: 20px; background: transparent;
@@ -510,6 +480,58 @@ component MessageDateField inherits Rectangle {
                     Rectangle { horizontal-stretch: 1; background: transparent; }
                     Btn { text: "取消"; width: 72px; small: true; clicked => { dropdown.close(); } }
                     Btn { text: "确定"; width: 72px; small: true; primary: true; clicked => { if root.calendar-accepted() { dropdown.close(); } } }
+                }
+                TouchArea {
+                    width: parent.width; height: parent.height;
+                    enabled: calendar-focus.year-open;
+                    clicked => { calendar-focus.close-years(); }
+                    scroll-event(event) => { return accept; }
+                }
+                year-list-panel := Rectangle {
+                    x: 48px; y: 46px; width: year-button.width; height: 228px;
+                    visible: calendar-focus.year-open;
+                    background: Theme.card; border-radius: 9px; border-width: 1px; border-color: Theme.border;
+                    TouchArea { width: parent.width; height: parent.height; }
+                    year-focus := FocusScope {
+                        width: parent.width; height: parent.height;
+                        enabled: calendar-focus.year-open;
+                        property <int> highlighted: root.calendar-year;
+                        function highlight(value: int) {
+                            self.highlighted = min(CalendarLimits.last-year, max(CalendarLimits.first-year, value));
+                            year-list.content-y = -min(CalendarLimits.year-count * 28px - year-list.height,
+                                max(0px, (self.highlighted - CalendarLimits.first-year) * 28px - 84px));
+                        }
+                        key-pressed(event) => {
+                            if event.text == Key.Escape { calendar-focus.close-years(); return accept; }
+                            if event.text == Key.Tab { calendar-focus.close-years(); return accept; }
+                            if event.text == Key.UpArrow || event.text == Key.DownArrow {
+                                self.highlight(self.highlighted + (event.text == Key.UpArrow ? -1 : 1));
+                                return accept;
+                            }
+                            if event.text == Key.PageUp || event.text == Key.PageDown {
+                                self.highlight(self.highlighted + (event.text == Key.PageUp ? -8 : 8));
+                                return accept;
+                            }
+                            if event.text == Key.Return || event.text == Key.Space {
+                                calendar-focus.select-year(self.highlighted);
+                                return accept;
+                            }
+                            return reject;
+                        }
+                        year-list := ListView {
+                            x: 4px; y: 2px; width: parent.width - 8px; height: parent.height - 4px;
+                            horizontal-scrollbar-policy: always-off;
+                            for row in CalendarLimits.year-count : Rectangle {
+                                width: year-list.visible-width; height: 28px;
+                                Btn {
+                                    width: parent.width; y: 1px; small: true;
+                                    text: (CalendarLimits.first-year + row) + " 年";
+                                    selected: year-focus.highlighted == CalendarLimits.first-year + row;
+                                    clicked => { calendar-focus.select-year(CalendarLimits.first-year + row); }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -619,10 +641,10 @@ component WorkspacePicker inherits Rectangle {
             spacing: 1px; alignment: center;
             title-row := HorizontalLayout {
                 spacing: 6px; alignment: LayoutAlignment.start;
-                product-label := Text { width: self.preferred-width; text: root.current == 0 ? "评论聚合" : "消息归档"; color: Theme.text; font-size: Theme.font-title; font-weight: 700; }
+                product-label := Text { width: self.preferred-width; text: root.current == 0 ? "稿件评论" : "消息归档"; color: Theme.text; font-size: Theme.font-title; font-weight: 700; }
                 DownChevron { y: (parent.height - self.height)/2; }
             }
-            Text { text: root.current == 0 ? "稿件评论 · 收集与归档" : "私信与互动通知 · 收集与归档"; color: Theme.faint; font-size: Theme.font-hint; }
+            Text { text: root.current == 0 ? "他人在我的稿件下发表的评论" : "私信与互动通知 · 收集与归档"; color: Theme.faint; font-size: Theme.font-hint; }
         }
         TouchArea { enabled: !root.blocked; mouse-cursor: pointer; clicked => { menu.show(); } }
     }
@@ -644,7 +666,7 @@ component WorkspacePicker inherits Rectangle {
                     x: 5px; y: 5px + value * 56px; width: parent.width - 10px; height: 56px; border-radius: 6px;
                     background: menu-focus.highlighted == value ? Theme.accent-soft : white;
                     VerticalLayout { padding-left: 12px; padding-right: 30px; spacing: 2px; alignment: center;
-                        Text { text: value == 0 ? "评论聚合" : "消息归档"; color: Theme.text; font-size: Theme.font-section; font-weight: 700; }
+                        Text { text: value == 0 ? "稿件评论" : "消息归档"; color: Theme.text; font-size: Theme.font-section; font-weight: 700; }
                         Text { text: value == 0 ? "稿件评论" : "私信、粉丝团与互动通知"; color: Theme.muted; font-size: Theme.font-hint; }
                     }
                     Text { x: parent.width - 26px; width: 20px; height: parent.height; text: root.current == value ? "✓" : ""; color: Theme.accent-dark; vertical-alignment: center; }
@@ -686,7 +708,9 @@ component TaskControls inherits Rectangle {
     in property <bool> loading-local;
     in property <bool> start-enabled: true;
     in property <string> start-label: "开始采集";
+    in property <bool> has-clearable-resume: false;
     callback start(); callback pause(); callback stop();
+    callback clear-resume();
     height: 32px;
     HorizontalLayout {
         spacing: 8px;
@@ -698,11 +722,14 @@ component TaskControls inherits Rectangle {
             text: "结束"; primary: true; width: 72px; clicked => {root.stop();}
         }
         if !root.loading-local && root.active-task != root.workspace && root.active-task != 3 && (root.busy || root.active-task != 0) : Text {
-            text: root.active-task == 1 ? "评论聚合正在采集…" : root.active-task == 2 ? "消息归档正在采集…" : "正在处理，请稍候…";
+            text: root.active-task == 1 ? "稿件评论正在采集…" : root.active-task == 2 ? "消息归档正在采集…" : "正在处理，请稍候…";
             color: Theme.muted; vertical-alignment: center;
         }
         if !root.loading-local && !root.busy && root.active-task == 0 : Btn {
             text: root.start-label; primary: true; horizontal-stretch: 1; enabled: root.start-enabled; clicked => {root.start();}
+        }
+        if root.has-clearable-resume && !root.loading-local && !root.busy && root.active-task == 0 : Btn {
+            text: "清除断点"; width: 88px; clicked => {root.clear-resume();}
         }
     }
 }
@@ -797,13 +824,13 @@ export component AppWindow inherits Window {
     in-out property <bool> message-date-auto-end: true;
     in-out property <string> message-date-error: "";
     in-out property <int> message-calendar-generation: 0;
-    in-out property <MessageCalendarDate> message-calendar-date: {year: 1970, month: 1, day: 1};
+    in-out property <MessageCalendarDate> message-calendar-date: {year: CalendarLimits.first-year, month: 1, day: 1};
     private property <bool> message-date-editable: !root.busy && !root.loading-local;
     pure callback message-date-display(string) -> string;
     callback message-date-clear(int);
     callback message-calendar-open(int) -> MessageCalendarDate;
     callback message-calendar-accept(int, MessageCalendarDate) -> bool;
-    in-out property <int> message-calendar-year: 1970;
+    in-out property <int> message-calendar-year: CalendarLimits.first-year;
     in-out property <int> message-calendar-month: 1;
     in-out property <[MessageCalendarCell]> message-calendar-days;
     callback message-calendar-shift(int);
@@ -826,7 +853,7 @@ export component AppWindow inherits Window {
     callback message-export();
     callback message-web();
 
-    title: (root.workspace == 0 ? "评论聚合" : "消息归档") + " · BiliArchive";
+    title: (root.workspace == 0 ? "稿件评论" : "消息归档") + " · BiliArchive";
     preferred-width: 1200px;
     preferred-height: 792px;
     min-width: 1040px;
@@ -843,7 +870,6 @@ export component AppWindow inherits Window {
     in-out property <bool> loading-local: false;
     // 断点续传：是否有未完成的进度、以及提示文案
     in-out property <bool> has-resume: false;
-    in-out property <string> resume-text: "";
     in-out property <float> progress: 0.0;
     in-out property <string> progress-text: "";
     in-out property <bool> verify-waiting: false;
@@ -1113,7 +1139,7 @@ export component AppWindow inherits Window {
                             range-scroll := HubScrollView {
                                 x: 8px; y: range-note.y + range-note.height + 6px;
                                 width: parent.width - 16px;
-                                height: max(0px, parent.height - self.y - 8px - (root.has-resume ? 56px : 0px));
+                                height: max(0px, parent.height - self.y - 8px);
                                 content-width: self.visible-width;
                                 content-height: 5 * Theme.range-row-height + 4 * Theme.range-row-gap;
                                 CollectionRangeRow {
@@ -1181,12 +1207,6 @@ export component AppWindow inherits Window {
                                     all-requested => { root.range-all(14); }
                                     bounds-edited => { root.range-edited(14); }
                                 }
-                            }
-                            if root.has-resume : HorizontalLayout {
-                                x: 8px; y: parent.height - 56px; width: parent.width - 16px; height: 48px;
-                                spacing: 6px;
-                                Text { vertical-alignment: top; text: root.resume-text; color: Theme.accent-dark; font-size: Theme.font-hint; wrap: word-wrap; horizontal-stretch: 1; }
-                                Btn { text: "清除"; width: 44px; small: true; enabled: !root.busy; clicked => { root.clear-resume(); } }
                             }
                         }
 
@@ -1382,8 +1402,10 @@ export component AppWindow inherits Window {
                         comments-task-controls := TaskControls {
                             workspace: 1; active-task: root.active-task; busy: root.busy; loading-local: root.loading-local;
                             start-label: root.has-resume ? "继续采集（断点）" : (root.scope == 0 ? "开始采集全部评论" : "开始采集所选稿件");
+                            has-clearable-resume: root.has-resume;
                             start-enabled: !root.account-offline && (root.scope == 0 ? root.any-range-enabled : root.selected-count > 0);
                             start => {root.start();} pause => {root.pause();} stop => {root.stop();}
+                            clear-resume => {root.clear-resume();}
                         }
                     }
                 }
@@ -1490,7 +1512,7 @@ export component AppWindow inherits Window {
                                 }
                             }
                         }
-                        Text { text: "yyyy/MM/dd · 留空不限 · 结束日期包含当天"; color: Theme.faint; font-size: Theme.font-hint; wrap: word-wrap; }
+                        Text { text: "留空不限 · 结束日期包含当天"; color: Theme.faint; font-size: Theme.font-hint; wrap: word-wrap; }
                         if root.message-date-error != "" : Text { text: root.message-date-error; color: Theme.warn; font-size: Theme.font-hint; wrap: word-wrap; }
                         Text { text: root.message-attachments-status; color: Theme.faint; font-size: Theme.font-hint; wrap: word-wrap; }
                         Text { text: "自动归档消息与附件；系统会话不采集。\n暂停保留断点，结束保留已保存的数据。"; wrap: word-wrap; color: Theme.faint; font-size: Theme.font-hint; }
@@ -1604,7 +1626,7 @@ export component AppWindow inherits Window {
                     changed y => { root.settings-dialog-top = self.y; }
                     changed height => { root.settings-dialog-height = self.height; }
                     init => { root.settings-dialog-top = self.y; root.settings-dialog-height = self.height; }
-                    width: 478px;
+                    width: 448px;
                     height: min(max(80px, settings-body.preferred-height) + 134px, root.height - 40px);
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
@@ -1651,103 +1673,141 @@ export component AppWindow inherits Window {
                                 settings-body := VerticalLayout {
                                     width: settings-scroll.visible-width - 12px; height: self.preferred-height;
                                     spacing: 13px;
+                                    property <length> control-width: 208px;
+                                    property <length> column-gap: 8px;
                                     // ---- 网页端口 ----
                                     VerticalLayout {
                                         spacing: 5px;
                                         Text { text: "网页端口"; color: Theme.text; font-size: Theme.font-section; font-weight: 600; }
                                         HorizontalLayout {
-                                            spacing: 8px;
-                                            Rectangle {
-                                                width: 108px;
-                                                height: 32px;
-                                                border-radius: 9px;
-                                                background: Theme.field;
-                                                border-width: 1px;
-                                                border-color: port-in.has-focus ? #F7C3D3 : Theme.border;
+                                            spacing: settings-body.column-gap;
+                                            HorizontalLayout {
+                                                width: settings-body.control-width;
+                                                spacing: 6px;
+                                                Rectangle {
+                                                    width: 76px;
+                                                    height: 32px;
+                                                    border-radius: 9px;
+                                                    background: Theme.field;
+                                                    border-width: 1px;
+                                                    border-color: port-in.has-focus ? #F7C3D3 : Theme.border;
 
-                                                port-in := TextInput {
-                                                    x: 9px;
-                                                    y: 0;
-                                                    width: parent.width - 18px;
-                                                    height: parent.height;
-                                                    text <=> root.web-port-text;
-                                                    input-type: number;
-                                                    single-line: true;
-                                                    color: Theme.text;
-                                                    font-size: Theme.font-body;
-                                                    vertical-alignment: center;
+                                                    port-in := TextInput {
+                                                        x: 9px;
+                                                        y: 0;
+                                                        width: parent.width - 18px;
+                                                        height: parent.height;
+                                                        text <=> root.web-port-text;
+                                                        input-type: number;
+                                                        single-line: true;
+                                                        color: Theme.text;
+                                                        font-size: Theme.font-body;
+                                                        vertical-alignment: center;
+                                                    }
+                                                }
+                                                Btn {
+                                                    text: "打开网页";
+                                                    width: 66px;
+                                                    clicked => { root.settings-open-web(); }
+                                                }
+                                                Btn {
+                                                    text: root.web-running ? "停止" : "启动";
+                                                    width: 54px;
+                                                    primary: root.web-running;
+                                                    clicked => { root.settings-toggle-web(); }
                                                 }
                                             }
-                                            Btn {
-                                                text: "打开网页";
-                                                width: 88px;
-                                                small: true;
-                                                enabled: true;
-                                                clicked => { root.settings-open-web(); }
+                                            VerticalLayout {
+                                                horizontal-stretch: 1;
+                                                alignment: LayoutAlignment.center;
+                                                spacing: 2px;
+                                                Text { text: root.web-running ? "服务运行中" : "服务未运行"; color: Theme.faint; font-size: Theme.font-hint; }
+                                                if root.web-running && root.web-address != "" : Rectangle {
+                                                    height: 15px;
+                                                    forward-focus: web-address-focus;
+                                                    accessible-role: button;
+                                                    accessible-label: root.web-address;
+                                                    border-radius: 3px;
+                                                    background: web-address-focus.has-focus ? #EDF4FA : transparent;
+                                                    Text {
+                                                        text: root.web-address;
+                                                        color: web-address-hit.has-hover ? #4D7697 : #577B9C;
+                                                        font-size: Theme.font-hint;
+                                                        vertical-alignment: center;
+                                                    }
+                                                    web-address-focus := FocusScope {
+                                                        key-pressed(event) => {
+                                                            if event.text == Key.Return || event.text == Key.Space {
+                                                                root.settings-open-web();
+                                                                return accept;
+                                                            }
+                                                            return reject;
+                                                        }
+                                                    }
+                                                    web-address-hit := TouchArea { mouse-cursor: pointer; clicked => { root.settings-open-web(); } }
+                                                }
                                             }
-                                            Btn {
-                                                text: root.web-running ? "停止" : "启动";
-                                                width: 62px;
-                                                small: true;
-                                                primary: root.web-running;
-                                                clicked => { root.settings-toggle-web(); }
-                                            }
-                                            Rectangle { horizontal-stretch: 1; background: transparent; }
                                         }
-                                        Text { text: root.web-running ? "服务运行中 · " + root.web-address : "服务未运行"; color: Theme.faint; font-size: Theme.font-hint; wrap: word-wrap; }
                                     }
 
                                     // ---- 翻页间隔 ----
                                     VerticalLayout {
                                         spacing: 5px;
-                                        Text { text: "翻页间隔（毫秒）"; color: Theme.text; font-size: Theme.font-section; font-weight: 600; }
+                                        Text { text: "翻页间隔"; color: Theme.text; font-size: Theme.font-section; font-weight: 600; }
                                         HorizontalLayout {
-                                            spacing: 8px;
-                                            Rectangle {
-                                                width: 76px;
-                                                height: 32px;
-                                                border-radius: 9px;
-                                                background: Theme.field;
-                                                border-width: 1px;
-                                                border-color: delay-in.has-focus ? #F7C3D3 : Theme.border;
+                                            spacing: settings-body.column-gap;
+                                            HorizontalLayout {
+                                                width: settings-body.control-width;
+                                                alignment: LayoutAlignment.start;
+                                                spacing: 6px;
+                                                Rectangle {
+                                                    width: 68px;
+                                                    height: 32px;
+                                                    border-radius: 9px;
+                                                    background: Theme.field;
+                                                    border-width: 1px;
+                                                    border-color: delay-in.has-focus ? #F7C3D3 : Theme.border;
 
-                                                delay-in := TextInput {
-                                                    x: 9px;
-                                                    y: 0;
-                                                    width: parent.width - 18px;
-                                                    height: parent.height;
-                                                    text <=> root.page-delay-text;
-                                                    input-type: number;
-                                                    single-line: true;
-                                                    color: Theme.text;
-                                                    font-size: Theme.font-body;
-                                                    vertical-alignment: center;
+                                                    delay-in := TextInput {
+                                                        x: 9px;
+                                                        y: 0;
+                                                        width: parent.width - 18px;
+                                                        height: parent.height;
+                                                        text <=> root.page-delay-text;
+                                                        input-type: number;
+                                                        single-line: true;
+                                                        color: Theme.text;
+                                                        font-size: Theme.font-body;
+                                                        vertical-alignment: center;
+                                                    }
                                                 }
-                                            }
-                                            Text { text: "~"; color: Theme.faint; font-size: Theme.font-body; vertical-alignment: center; }
-                                            Rectangle {
-                                                width: 76px;
-                                                height: 32px;
-                                                border-radius: 9px;
-                                                background: Theme.field;
-                                                border-width: 1px;
-                                                border-color: delay-max-in.has-focus ? #FBC3D3 : #E6E9F1;
+                                                Text { text: "ms"; color: Theme.faint; font-size: Theme.font-hint; vertical-alignment: center; }
+                                                Text { text: "~"; color: Theme.faint; font-size: Theme.font-body; vertical-alignment: center; }
+                                                Rectangle {
+                                                    width: 68px;
+                                                    height: 32px;
+                                                    border-radius: 9px;
+                                                    background: Theme.field;
+                                                    border-width: 1px;
+                                                    border-color: delay-max-in.has-focus ? #FBC3D3 : #E6E9F1;
 
-                                                delay-max-in := TextInput {
-                                                    x: 9px;
-                                                    y: 0;
-                                                    width: parent.width - 18px;
-                                                    height: parent.height;
-                                                    text <=> root.page-delay-max-text;
-                                                    input-type: number;
-                                                    single-line: true;
-                                                    color: Theme.text;
-                                                    font-size: Theme.font-body;
-                                                    vertical-alignment: center;
+                                                    delay-max-in := TextInput {
+                                                        x: 9px;
+                                                        y: 0;
+                                                        width: parent.width - 18px;
+                                                        height: parent.height;
+                                                        text <=> root.page-delay-max-text;
+                                                        input-type: number;
+                                                        single-line: true;
+                                                        color: Theme.text;
+                                                        font-size: Theme.font-body;
+                                                        vertical-alignment: center;
+                                                    }
                                                 }
+                                                Text { text: "ms"; color: Theme.faint; font-size: Theme.font-hint; vertical-alignment: center; }
                                             }
                                             Text {
-                                                text: "每翻一页在此区间随机；两值相同或留空相同则固定。越大越不易触发风控，但更慢";
+                                                text: "每翻一页在此区间随机\n越大越不易触发风控，但更慢";
                                                 color: Theme.faint;
                                                 font-size: Theme.font-hint;
                                                 vertical-alignment: center;
@@ -1769,23 +1829,37 @@ export component AppWindow inherits Window {
                                                 border-radius: 9px;
                                                 background: Theme.field;
                                                 border-width: 1px;
-                                                border-color: #E6E9F1;
+                                                border-color: export-dir-input.has-focus ? #F7C3D3 : #E6E9F1;
                                                 clip: true;
 
-                                                Text {
-                                                    text: root.export-dir-text == "" ? "（默认：应用配置目录下的 exports）" : root.export-dir-text;
-                                                    color: root.export-dir-text == "" ? #ABB1C0 : Theme.text;
-                                                    font-size: Theme.font-body;
-                                                    x: 9px;
-                                                    y: 0;
-                                                    width: parent.width - 18px;
-                                                    height: parent.height;
-                                                    vertical-alignment: center;
-                                                    overflow: elide;
+                                                Rectangle {
+                                                    x: 9px; width: parent.width - 18px; height: parent.height;
+                                                    clip: true;
+                                                    export-dir-input := TextInput {
+                                                        property <length> text-offset: 0px;
+                                                        accessible-label: "导出目录";
+                                                        text: root.export-dir-text == "" ? "（默认：应用配置目录下的 exports）" : root.export-dir-text;
+                                                        color: root.export-dir-text == "" ? #ABB1C0 : Theme.text;
+                                                        read-only: true;
+                                                        single-line: true;
+                                                        font-size: Theme.font-body;
+                                                        x: min(0px, max(parent.width - self.width, self.text-offset));
+                                                        width: max(parent.width, self.preferred-width + 2px);
+                                                        height: parent.height;
+                                                        vertical-alignment: center;
+                                                        changed text => { self.text-offset = 0px; }
+                                                        cursor-position-changed(position) => {
+                                                            if position.x + self.x < 0px {
+                                                                self.text-offset = -position.x;
+                                                            } else if position.x + self.x > parent.width - 2px {
+                                                                self.text-offset = parent.width - 2px - position.x;
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                             }
-                                            Btn { text: "选择"; width: 56px; small: true; clicked => { root.settings-pick-dir(); } }
-                                            Btn { text: "打开"; width: 56px; small: true; clicked => { root.settings-open-dir(); } }
+                                            Btn { text: "选择"; width: 56px; clicked => { root.settings-pick-dir(); } }
+                                            Btn { text: "打开"; width: 56px; clicked => { root.settings-open-dir(); } }
                                         }
                                     }
 
@@ -1793,45 +1867,56 @@ export component AppWindow inherits Window {
                                     VerticalLayout {
                                         spacing: 4px;
                                         HorizontalLayout {
-                                            height: 22px;
-                                            alignment: LayoutAlignment.start;
-                                            spacing: 8px;
-                                            Text { text: "归档预缓存"; color: Theme.text; font-size: Theme.font-section; font-weight: 600; vertical-alignment: center; }
-                                            Toggle { checked <=> root.archive-precache; enabled: !root.busy; }
+                                            spacing: settings-body.column-gap;
+                                            HorizontalLayout {
+                                                width: settings-body.control-width;
+                                                min-height: 22px;
+                                                alignment: LayoutAlignment.start;
+                                                spacing: 8px;
+                                                Text { text: "归档预缓存"; color: Theme.text; font-size: Theme.font-section; font-weight: 600; vertical-alignment: center; }
+                                                Toggle { checked <=> root.archive-precache; enabled: !root.busy; }
+                                            }
+                                            Text { text: "开启后预读归档，关闭后按需从磁盘读取，可减少内存占用。"; color: Theme.faint; font-size: Theme.font-hint; wrap: word-wrap; vertical-alignment: center; horizontal-stretch: 1; }
                                         }
-                                        Text { text: "开启后预读归档，关闭后按需从磁盘读取，可减少内存占用。"; color: Theme.faint; font-size: Theme.font-hint; wrap: word-wrap; }
                                         HorizontalLayout {
-                                            alignment: LayoutAlignment.start;
-                                            spacing: 8px;
-                                            Text { text: "本地归档线程数"; color: Theme.text; font-size: Theme.font-body; vertical-alignment: center; }
-                                            Rectangle {
-                                                width: 68px;
-                                                height: 32px;
-                                                border-radius: 9px;
-                                                background: Theme.field;
-                                                border-width: 1px;
-                                                border-color: workers-in.has-focus ? #F7C3D3 : Theme.border;
-                                                Text {
-                                                    x: 9px; width: parent.width - 18px; height: parent.height;
-                                                    text: "自动"; visible: root.archive-workers-text == "" && !workers-in.has-focus;
-                                                    color: Theme.faint; font-size: Theme.font-body; vertical-alignment: center;
-                                                }
-                                                workers-in := TextInput {
-                                                    x: 9px; width: parent.width - 18px; height: parent.height;
-                                                    text <=> root.archive-workers-text;
-                                                    input-type: number; single-line: true;
-                                                    color: Theme.text; font-size: Theme.font-body; vertical-alignment: center;
+                                            spacing: settings-body.column-gap;
+                                            HorizontalLayout {
+                                                width: settings-body.control-width;
+                                                alignment: LayoutAlignment.start;
+                                                spacing: 10px;
+                                                Text { text: "本地归档线程数"; color: Theme.text; font-size: Theme.font-section; font-weight: 600; vertical-alignment: center; }
+                                                Rectangle {
+                                                    width: 68px;
+                                                    height: 32px;
+                                                    border-radius: 9px;
+                                                    background: Theme.field;
+                                                    border-width: 1px;
+                                                    border-color: workers-in.has-focus ? #F7C3D3 : Theme.border;
+                                                    Text {
+                                                        x: 9px; width: parent.width - 18px; height: parent.height;
+                                                        text: "自动"; visible: root.archive-workers-text == "" && !workers-in.has-focus;
+                                                        color: Theme.faint; font-size: Theme.font-body; vertical-alignment: center;
+                                                    }
+                                                    workers-in := TextInput {
+                                                        x: 9px; width: parent.width - 18px; height: parent.height;
+                                                        text <=> root.archive-workers-text;
+                                                        input-type: number; single-line: true;
+                                                        color: Theme.text; font-size: Theme.font-body; vertical-alignment: center;
+                                                    }
                                                 }
                                             }
-                                            Text { text: "1–16，留空自动（" + root.archive-workers-auto + " 线程）"; color: Theme.faint; font-size: Theme.font-hint; vertical-alignment: center; }
+                                            Text { text: "1–16，留空自动（" + root.archive-workers-auto + " 线程）"; color: Theme.faint; font-size: Theme.font-hint; vertical-alignment: center; wrap: word-wrap; horizontal-stretch: 1; }
                                         }
                                     }
                                     Rectangle { height: 1px; background: #F1F3F8; }
                                     Text { text: "离线资源"; color: Theme.text; font-size: Theme.font-section; font-weight: 600; }
-                                    Text { text: "私信图片始终保存；其他消息附件同样始终启用（包含已采集粉丝团）。头像、封面和评论配图默认只保留链接"; color: Theme.faint; font-size: Theme.font-hint; wrap: word-wrap; }
-                                    HorizontalLayout { height: 28px; spacing: 12px; Text { height: 28px; text: "用户头像"; color: Theme.text; font-size: Theme.font-body; vertical-alignment: center; horizontal-stretch: 1; } Toggle { checked <=> root.resource-avatars; enabled: !root.busy; } }
-                                    HorizontalLayout { height: 28px; spacing: 12px; Text { height: 28px; text: "稿件 / 主题封面"; color: Theme.text; font-size: Theme.font-body; vertical-alignment: center; horizontal-stretch: 1; } Toggle { checked <=> root.resource-covers; enabled: !root.busy; } }
-                                    HorizontalLayout { height: 28px; spacing: 12px; Text { height: 28px; text: "评论 / 动态配图"; color: Theme.text; font-size: Theme.font-body; vertical-alignment: center; horizontal-stretch: 1; } Toggle { checked <=> root.resource-content-images; enabled: !root.busy; } }
+                                    Text { text: "私信图片始终保存；其他消息附件同样始终启用（包含已采集粉丝团）。\n头像、封面和评论配图默认只保留链接"; color: Theme.faint; font-size: Theme.font-hint; wrap: word-wrap; }
+                                    offline-resources := VerticalLayout {
+                                        spacing: 4px;
+                                        HorizontalLayout { height: 26px; spacing: 12px; Text { text: "用户头像"; color: Theme.text; font-size: Theme.font-body; vertical-alignment: center; horizontal-stretch: 1; } Toggle { checked <=> root.resource-avatars; enabled: !root.busy; } }
+                                        HorizontalLayout { height: 26px; spacing: 12px; Text { text: "稿件 / 主题封面"; color: Theme.text; font-size: Theme.font-body; vertical-alignment: center; horizontal-stretch: 1; } Toggle { checked <=> root.resource-covers; enabled: !root.busy; } }
+                                        HorizontalLayout { height: 26px; spacing: 12px; Text { text: "评论 / 动态配图"; color: Theme.text; font-size: Theme.font-body; vertical-alignment: center; horizontal-stretch: 1; } Toggle { checked <=> root.resource-content-images; enabled: !root.busy; } }
+                                    }
                                     Btn { text: "处理资源（使用已保存设置）"; enabled: !root.busy; clicked => { root.process-resources(); } }
                                 }
                             }

@@ -1,7 +1,8 @@
 //! Calendar selection and date bounds shared by the message UI and collection options.
-use crate::{AppWindow, MessageCalendarCell, MessageCalendarDate};
+use crate::{AppWindow, CalendarLimits, MessageCalendarCell, MessageCalendarDate};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{Datelike, Local, NaiveDate, TimeZone};
+use slint::ComponentHandle;
 
 pub fn parse(value: &str) -> Result<Option<NaiveDate>> {
     let value = value.trim();
@@ -157,6 +158,10 @@ fn cells(date: NaiveDate, today: NaiveDate) -> Vec<MessageCalendarCell> {
         .collect()
 }
 fn prepare_calendar(ui: &AppWindow, date: NaiveDate) {
+    let limits = ui.global::<CalendarLimits>();
+    let first = NaiveDate::from_ymd_opt(limits.get_first_year(), 1, 1).unwrap();
+    let last = NaiveDate::from_ymd_opt(limits.get_last_year(), 12, 31).unwrap();
+    let date = date.clamp(first, last);
     ui.set_message_calendar_date(calendar_date(date));
     ui.set_message_calendar_year(date.year());
     ui.set_message_calendar_month(date.month() as i32);
@@ -166,7 +171,10 @@ fn prepare_calendar(ui: &AppWindow, date: NaiveDate) {
     ))));
 }
 fn select_month(ui: &AppWindow, year: i32, month: i32) {
-    if !(1970..=9999).contains(&year) || !(1..=12).contains(&month) {
+    let limits = ui.global::<CalendarLimits>();
+    if !(limits.get_first_year()..=limits.get_last_year()).contains(&year)
+        || !(1..=12).contains(&month)
+    {
         return;
     }
     let day = ui.get_message_calendar_date().day.clamp(1, 31);

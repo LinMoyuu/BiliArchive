@@ -589,5 +589,10 @@ mod tests {
 
 // List responses stay small even when a notification has thousands of archived users.
 pub fn item_summary(i: &Item) -> Value {
-    json!({"id":i.id,"type":i.ty,"category":item_type(i),"session":i.session,"sender_uid":i.sender_uid,"sender_name":i.sender_name,"text":i.text,"timestamp":i.timestamp,"url":i.url,"status":i.status,"attachments":i.attachments,"raw":i.raw,"like_count":i.like_count,"like_users_count":i.like_users.len(),"like_detail":i.like_detail})
+    let mut value = json!({"id":i.id,"type":i.ty,"category":item_type(i),"session":i.session,"sender_uid":i.sender_uid,"sender_name":i.sender_name,"text":i.text,"timestamp":i.timestamp,"url":i.url,"status":i.status,"attachments":i.attachments,"raw":i.raw,"like_count":i.like_count,"like_users_count":i.like_users.len(),"like_detail":i.like_detail});
+    if !i.my_comment_rpid.is_empty() { value["my_comment_rpid"] = json!(i.my_comment_rpid); }
+    if !i.reply_rpid.is_empty() { value["reply_rpid"] = json!(i.reply_rpid); }
+    let excerpt = crate::my_comments::snippet(i);
+    if !excerpt.is_empty() { value["comment_excerpt"] = json!(excerpt); }
+    value
 }

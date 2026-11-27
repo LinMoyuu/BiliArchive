@@ -325,8 +325,14 @@ fn handle(
                 return;
             }
         }
+        let own_list = path == "/api/messages/items"
+            && param("type").as_deref() == Some(crate::my_comments::VIEW);
+        let own_likes = if own_list {
+            view.as_ref().map(|view| view.messages("likes", ""))
+        } else { None };
         let messages = if let Some(view) = &view {
             let ty = match path.as_str() {
+                "/api/messages/items" if own_list => "replies".to_owned(),
                 "/api/messages/likes" => "likes".to_owned(),
                 "/api/messages/profile" | "/api/messages/subjects" => String::new(),
                 "/api/messages/items" | "/api/messages/groups" => param("type").unwrap_or_else(|| "all".into()),
@@ -336,6 +342,16 @@ fn handle(
         } else { messages };
         if reject_changed(&mut stream) { return; }
         let state = messages.lock().unwrap();
+        let my_comment_detail = |rpid: &str| match &view {
+            Some(view) => view.my_comment(rpid),
+            None => crate::my_comments::read(&state.root, state.doc.account_uid.parse().unwrap_or(0), rpid),
+        };
+        let with_my_comment = |mut value: serde_json::Value, item: &messages::Item| {
+            if !item.my_comment_rpid.is_empty() {
+                value["my_comment"] = json!(my_comment_detail(&item.my_comment_rpid));
+            }
+            value
+        };
         if path == "/api/messages/profile" {
             let uid = state.doc.account_uid.clone();
             if param("account_uid").as_deref() != Some(uid.as_str()) {
@@ -441,7 +457,14 @@ fn handle(
             let sort=param("sort").unwrap_or_else(||"time".into());
             match crate::message_groups::query(&state.doc,&ty,&mode,&query,ascending).and_then(|mut groups|{crate::message_groups::sort_groups(&mut groups,&sort)?;Ok(groups)}) {
                 Ok(groups)=>{
-                    let body=json!({"account_uid":state.doc.account_uid,"total":groups.len(),"total_items":groups.iter().map(|g|g.items.len()).sum::<usize>(),"groups":groups.iter().skip(offset).take(limit).map(|g|g.summary()).collect::<Vec<_>>()}).to_string();
+                    let page = groups.iter().skip(offset).take(limit).map(|group| {
+                        let mut row = group.summary();
+                        if let Some(rpid) = row["item"]["my_comment_rpid"].as_str() {
+                            row["item"]["my_comment"] = json!(my_comment_detail(rpid));
+                        }
+                        row
+                    }).collect::<Vec<_>>();
+                    let body=json!({"account_uid":state.doc.account_uid,"total":groups.len(),"total_items":groups.iter().map(|g|g.items.len()).sum::<usize>(),"groups":page}).to_string();
                     respond_private(&mut stream,"200 OK","application/json; charset=utf-8",body.as_bytes(),method=="HEAD");
                 },
                 Err(_)=>respond_private(&mut stream,"400 Bad Request","text/plain",b"invalid grouping",method=="HEAD"),
@@ -452,7 +475,7 @@ fn handle(
             let ty = param("type").unwrap_or_else(|| "all".into());
             let session = param("session").unwrap_or_default();
             let q = param("q").unwrap_or_default();
-            if ty != "all" && !messages::VIEW_TYPES.contains(&ty.as_str()) {
+            if !own_list && ty != "all" && !messages::VIEW_TYPES.contains(&ty.as_str()) {
                 respond_private(
                     &mut stream,
                     "400 Bad Request",
@@ -469,13 +492,31 @@ fn handle(
                 .and_then(|s| s.parse::<usize>().ok())
                 .unwrap_or(50)
                 .clamp(1, 200);
+            if own_list {
+                let Some(order) = crate::my_comments::Order::parse(param("order").as_deref().unwrap_or("new")) else {
+                    respond_private(&mut stream,"400 Bad Request","text/plain",b"invalid comment order",method=="HEAD");
+                    return;
+                };
+                let likes = own_likes.as_ref().map(|store| store.lock().unwrap());
+                let items = state.doc.items.iter().chain(likes.iter().flat_map(|store| store.doc.items.iter()));
+                let (total, rows) = crate::my_comments::page(items, &q, order, offset, limit, my_comment_detail);
+                let body = json!({"account_uid":state.doc.account_uid,"total":total,"items":rows}).to_string();
+                respond_private(&mut stream,"200 OK","application/json; charset=utf-8",body.as_bytes(),method=="HEAD");
+                return;
+            }
+            let my_comment = param("my_comment_rpid");
+            if my_comment.as_ref().is_some_and(|id| ty != "replies" || !crate::my_comments::valid_id(id)
+                || param("group_by").is_some() || param("group_key").is_some()) {
+                respond_private(&mut stream,"400 Bad Request","text/plain",b"invalid comment filter",method=="HEAD");
+                return;
+            }
             if param("group_by").is_some() || param("group_key").is_some() {
                 let mode=param("group_by").unwrap_or_default();let key=param("group_key").unwrap_or_default();
                 if key.is_empty(){respond_private(&mut stream,"400 Bad Request","text/plain",b"missing group key",method=="HEAD");return;}
                 match crate::message_groups::query(&state.doc,&ty,&mode,&q,param("order").is_some_and(|v|v=="old")) {
                     Ok(groups)=>{
                         let items=groups.into_iter().find(|g|g.key==key).map(|g|g.items).unwrap_or_default();
-                        let body=json!({"account_uid":state.doc.account_uid,"total":items.len(),"items":items.into_iter().skip(offset).take(limit).map(crate::message_subjects::summary).collect::<Vec<_>>()}).to_string();
+                        let body=json!({"account_uid":state.doc.account_uid,"total":items.len(),"items":items.into_iter().skip(offset).take(limit).map(|i| with_my_comment(crate::message_subjects::summary(i), i)).collect::<Vec<_>>()}).to_string();
                         respond_private(&mut stream,"200 OK","application/json; charset=utf-8",body.as_bytes(),method=="HEAD");
                     },
                     Err(_)=>respond_private(&mut stream,"400 Bad Request","text/plain",b"invalid grouping",method=="HEAD"),
@@ -483,16 +524,20 @@ fn handle(
                 return;
             }
             let include_groups = ty == "private" && param("include_groups").as_deref() == Some("1");
+            let mut seen_replies = std::collections::BTreeSet::new();
             let list: Vec<_> = state.doc.query_ordered(
                 if include_groups { "all" } else { &ty }, &session, &q,
                 param("order").as_deref().unwrap_or("new"),
-            ).into_iter().filter(|item| !include_groups || ["private", "groups"].contains(&messages::item_type(item))).collect();
+            ).into_iter().filter(|item| !include_groups || ["private", "groups"].contains(&messages::item_type(item)))
+                .filter(|item| my_comment.as_ref().is_none_or(|id| item.my_comment_rpid == *id
+                    && seen_replies.insert(if item.reply_rpid.is_empty() { item.id.as_str() } else { item.reply_rpid.as_str() })))
+                .collect();
             let total = list.len();
             let page: Vec<_> = list.into_iter().skip(offset).take(limit).collect();
             let known = if page.iter().any(|i| i.ty == "private") {
                 if offline{crate::message_profiles::local_profiles(&state.doc)}else{profiles.snapshot(&state.doc.account_uid, crate::message_profiles::local_profiles(&state.doc))}
             } else { Default::default() };
-            let view=json!({"account_uid":state.doc.account_uid,"total":total,"items":page.into_iter().map(|i| crate::message_profiles::item_summary(i, &known)).collect::<Vec<_>>()});
+            let view=json!({"account_uid":state.doc.account_uid,"total":total,"items":page.into_iter().map(|i| with_my_comment(crate::message_profiles::item_summary(i, &known), i)).collect::<Vec<_>>()});
             drop(state);
             let body=view.to_string();
             respond_private(

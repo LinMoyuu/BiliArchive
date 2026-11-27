@@ -231,6 +231,8 @@
 #message-workspace .message-toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px}
 #message-workspace .message-toolbar .tools{margin:0}
 #message-workspace .message-toolbar-right{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin-left:auto}
+#message-workspace #m-my-comment-note{min-width:0;max-width:100%;font-size:12px;overflow-wrap:anywhere}
+@media(max-width:600px){#message-workspace #m-my-comment-note{flex-basis:100%}}
 #message-workspace #m-status{margin:0;font-size:12px}
 #message-workspace .load-sentinel{height:1px;pointer-events:none}
 #message-workspace [data-group-error]{color:#c33}
@@ -274,6 +276,10 @@
 #message-workspace article.reply-notice.mine{border-left:2px solid #fbd0dd;padding-left:10px;background:linear-gradient(90deg,#fff8fb,transparent 160px)}
 #message-workspace .reply-content [data-like-id]{margin-top:8px;color:var(--muted);font-size:12px}
 #message-workspace .reply-content [data-like-id]>summary{cursor:pointer;color:var(--pink-dark)}
+#message-workspace article.my-comment{grid-template-columns:minmax(0,1fr)}
+#message-workspace .my-comment details[data-my-comment]{margin-top:10px;padding-left:12px;border-left:1px solid var(--line)}
+#message-workspace .my-comment details[data-my-comment]>summary{cursor:pointer;color:var(--pink-dark)}
+#message-workspace [data-my-comment-replies] .reply-notice{border-top:1px solid var(--line)}
 *{scrollbar-width:thin;scrollbar-color:var(--scroll-thumb) transparent}
 *::-webkit-scrollbar{width:10px;height:10px}
 *::-webkit-scrollbar-track{background:transparent}
@@ -525,15 +531,14 @@ img[data-image-state="loaded"],.account-photo[data-image-state="loaded"] #accoun
 }
 
 
-/* Reserve space for all paging states and prevent the progress indicator from moving rows. */
+/* Keep the pager height stable while showing the spinner only during loading. */
 #message-workspace :is(.pager,.group-more,.like-detail-progress){min-block-size:44px}
 #message-workspace :is(#m-page,[data-group-progress],[data-like-progress]){
  display:inline-flex;align-items:center;gap:4px;min-block-size:18px;font-size:12px;line-height:18px;
 }
-#message-workspace :is(#m-page,[data-group-progress],[data-like-progress])::before{
- content:"";display:inline-block;box-sizing:border-box;flex:0 0 14px;width:14px;height:14px;margin:0;visibility:hidden;
+#message-workspace :is(#m-page,[data-group-progress],[data-like-progress])[data-loading="inline"]::before{
+ box-sizing:border-box;flex:0 0 14px;width:14px;height:14px;margin:0;
 }
-#message-workspace :is(#m-page,[data-group-progress],[data-like-progress])[data-loading="inline"]::before{visibility:visible}
 #message-workspace :is(#m-more,#m-chat-more,[data-group-more],[data-like-more]){
  min-inline-size:92px;min-block-size:30px;
 }

@@ -2,11 +2,15 @@ const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/st
 const scriptFile=process.argv[2]||require('node:path').join(__dirname,'../web/messages.js');
 const script=fs.readFileSync(scriptFile,'utf8').replace(/\r\n/g,'\n').match(/BEGIN WORKSPACE LOGIC\n([\s\S]*?)\n\/\/ END WORKSPACE LOGIC/)[1];
 const nodes=new Map();function node(id){if(!nodes.has(id))nodes.set(id,{innerHTML:'',scrollTop:0,scrollHeight:1000,clientHeight:500,classList:{add(){},remove(){}},getBoundingClientRect(){return{top:0,bottom:500}},replaceChildren(...children){this.children=children;this.innerHTML=children.map(n=>n.innerHTML).join('')},insertAdjacentHTML(_,html){this.innerHTML+=html},textContent:'',value:'',querySelectorAll(){return []},querySelector(selector){return node(id+selector)}});return nodes.get(id)}
-const buttons=['replies','mentions','likes','private'].map(type=>({dataset:{type},attributes:{},setAttribute(k,v){this.attributes[k]=v}}));
+const buttons=['replies','mentions','likes','private','my_comments'].map(type=>({dataset:{type},attributes:{},setAttribute(k,v){this.attributes[k]=v}}));
 const fixture={id:'18446744073709551614',type:'private',session:'user_2',sender_uid:'12',sender_name:'<script>alert(1)</script>',text:'hello <img src=x onerror=alert(1)>',timestamp:1700000000,status:1,raw:{msg_key:'18446744073709551614'},attachments:[{id:'a'.repeat(32),url:'https://example.org/a.png',path:'attachments/a.png',error:''}]};
 const requests=[];let account='12';let fail=false;
 const ctx=vm.createContext({console,URL,URLSearchParams,location:{href:'http://127.0.0.1:9000/messages'},setTimeout,clearTimeout,document:{createElement(){return node('element-'+Math.random())},getElementById:node,querySelectorAll(selector){return selector==='#types button'?buttons:[]}},fetch:async url=>{
 requests.push(url);if(fail)return{ok:false,status:500};
+if(url.includes('my_comment_rpid='))return {ok:true,json:async()=>({account_uid:account,total:1,items:[{
+ id:'44',type:'replies',reply_rpid:'9',my_comment_rpid:'18446744073709551614',timestamp:1700000000,
+ text:'archived reply',my_comment:{text:'<完整正文>'},raw:{item:{type:'reply',source_content:'archived reply',native_uri:'bilibili://video/42?comment_root_id=7'}}
+}]})};
 if(url.includes('/api/messages/likes?'))return{ok:true,json:async()=>({account_uid:account,notice:'通知报告 100 个赞 / 已归档 51 位用户 · 接口已遍历；明细数与通知计数不一致',total:51,items:[{uid:'18446744073709551614',nickname:'<script>like user</script>',like_time:100,raw:{}}]})};
 return{ok:true,json:async()=>url.includes('/summary')?{account_uid:account,counts:{private:1,groups:2,likes:0,replies:0,mentions:0},sessions:[{key:'user_2',name:'someone',timestamp:100,session_type:1,talker_id:'2'},{key:'group_3',name:'fan group',timestamp:101,session_type:2,talker_id:'3'}],attachments_saved:1,attachments_pending:0}:{account_uid:account,total:1,items:[fixture]}};
 }});
@@ -21,6 +25,34 @@ assert(node('items').innerHTML.includes('/api/messages/attachments/'+'a'.repeat(
 for(const attr of ['rel="noopener noreferrer"','target="_blank"','referrerpolicy="no-referrer"'])assert(node('items').innerHTML.includes(attr));
 assert.equal(vm.runInContext('safeURL("javascript:alert(1)")',ctx),'');assert.equal(vm.runInContext('safeURL("file:///secret")',ctx),'');
 
+const myCommentFixture={id:'18446744073709551614',type:'my_comments',reply_count:1,sources:['likes','replies'],text:'<完整正文>',my_comment:{text:'<完整正文>',timestamp:1700000000},raw:{item:{native_uri:'bilibili://video/42?comment_root_id=7&comment_secondary_id=9'}}};
+ctx.myCommentFixture=myCommentFixture;
+const ownHTML=vm.runInContext('renderItem(myCommentFixture)',ctx);
+assert(ownHTML.includes('已归档的回复（1）'));
+assert(ownHTML.includes('&lt;完整正文&gt;'));
+assert(ownHTML.includes('#reply18446744073709551614'));
+assert(!ownHTML.includes('#reply9'));
+assert(ownHTML.includes('最近互动')&&ownHTML.includes('发布于'));
+ctx.imageOnly={...myCommentFixture,text:'',my_comment:{text:'',timestamp:0,images:['//i0.hdslb.com/photo/123?width=400','javascript:alert(1)']}};
+const imageOnlyHTML=vm.runInContext('renderItem(imageOnly)',ctx);
+assert(imageOnlyHTML.includes('data-archive-src="https://i0.hdslb.com/photo/123?width=400"'));
+assert(imageOnlyHTML.includes('href="https://i0.hdslb.com/photo/123?width=400"'));
+assert(imageOnlyHTML.includes('最近互动'));
+assert(!imageOnlyHTML.includes('发布于')&&!imageOnlyHTML.includes('评论正文未归档')&&!imageOnlyHTML.includes('javascript:'));
+const ownDetail=node('own-detail');
+ownDetail.dataset={myComment:myCommentFixture.id};
+ownDetail.open=true;
+ctx.ownRoot={querySelectorAll:()=>[ownDetail]};
+vm.runInContext('bindMyComments(ownRoot)',ctx);
+ownDetail.ontoggle();
+await new Promise(resolve=>setImmediate(resolve));
+const ownRequest=new URL(requests.at(-1),'http://local');
+assert.equal(ownRequest.searchParams.get('type'),'replies');
+assert.equal(ownRequest.searchParams.get('my_comment_rpid'),myCommentFixture.id);
+assert(ownDetail.querySelector('[data-my-comment-replies]').innerHTML.includes('archived reply'));
+assert(ownDetail.querySelector('[data-my-comment-replies]').innerHTML.includes('#reply9'));
+assert(ownDetail.querySelector('[data-my-comment-replies]').innerHTML.includes('&lt;完整正文&gt;'));
+
 
 assert.equal(vm.runInContext("categoryOf({type:'private',session:'group_3'})",ctx),'groups');
 await vm.runInContext("state.type='private';summary()",ctx);
@@ -33,6 +65,15 @@ assert.equal(new URL(requests.at(-1),'http://local').searchParams.get('type'),'g
 assert.equal(new URL(requests.at(-1),'http://local').searchParams.get('include_groups'),'0');
 await vm.runInContext("state.session='user_2';load()",ctx);
 assert.equal(new URL(requests.at(-1),'http://local').searchParams.get('type'),'private');
+vm.runInContext("$('conversation-pane').scrollTop=300;$('session-pane').scrollTop=200;$('q').value='unfinished filter';$('q').oninput()",ctx);
+await buttons.find(b=>b.dataset.type==='private').onclick();
+assert.equal(vm.runInContext('state.session',ctx),'');
+assert.equal(vm.runInContext('privateSelection',ctx),'');
+assert.equal(vm.runInContext('state.q',ctx),'');
+assert.equal(node('q').value,'');
+assert.equal(node('chat-view').hidden,true);
+assert.equal(node('conversation-pane').scrollTop,0);
+assert.equal(node('session-pane').scrollTop,0);
 assert(vm.runInContext("!sessionButtons([{key:'user_2',session_type:1,name:'someone',timestamp:1}]).includes('粉丝团')",ctx));
 assert.deepEqual(Array.from(vm.runInContext("visibleSessions([{key:'u1',session_type:1,timestamp:100},{key:'g1',session_type:2,timestamp:2},{key:'g2',session_type:2,timestamp:3},{key:'u2',session_type:1,timestamp:200}]).map(s=>s.key)",ctx)),['g2','g1','u2','u1']);
 assert(node('header-stats').innerHTML.includes('粉丝团 2'));assert(node('header-stats').innerHTML.includes('<b>3</b>条私信'));assert(!node('status').textContent.includes('私信'));
@@ -43,6 +84,9 @@ assert.equal(node('sessions').hidden,true);assert(node('sessions').innerHTML.inc
 await vm.runInContext("state.q='keep query';state.order='old';state.offset=50",ctx);
 await buttons.find(b=>b.dataset.type==='mentions').onclick();
 assert.equal(vm.runInContext('state.type',ctx),'mentions');assert.equal(vm.runInContext('state.session',ctx),'');assert.equal(vm.runInContext('state.offset',ctx),1);assert.equal(vm.runInContext('state.q',ctx),'keep query');assert.equal(vm.runInContext('state.order',ctx),'old');
+await buttons.find(b=>b.dataset.type==='mentions').onclick();
+assert.equal(vm.runInContext('state.q',ctx),'');
+assert.equal(vm.runInContext('state.order',ctx),'old');
 const likeFixture={...fixture,id:'7',type:'likes',like_count:100,like_users_count:51,like_detail:{status:'finished',error:''}};
 ctx.likeFixture=likeFixture;
 vm.runInContext('render([likeFixture])',ctx);
@@ -58,9 +102,45 @@ let likeURL=new URL(requests.at(-1),'http://local');assert.equal(likeURL.searchP
 await vm.runInContext('loadMoreLikeUsers(detail)',ctx);likeURL=new URL(requests.at(-1),'http://local');assert.equal(likeURL.searchParams.get('offset'),'1');assert.equal(controls.get('[data-like-more]').hidden,false);
 fail=true;await vm.runInContext('loadLikeUsers(detail)',ctx);assert(controls.get('[data-like-error]').textContent.includes('500'));assert.equal(typeof controls.get('[data-like-more]').onclick,'function');fail=false;
 assert.equal(vm.runInContext('likeUserHTML({uid:"0",nickname:"anonymous",like_time:0})',ctx).includes('space.bilibili.com/0'),false);
+vm.runInContext("state.type='likes';likeView={id:'7',listTop:300};$('workspace-scroll').scrollTop=500;$('list-pane').hidden=true;$('like-detail').hidden=false;$('like-detail').querySelector('[data-like-id]').dataset={request:'1'}",ctx);
+await buttons.find(b=>b.dataset.type==='likes').onclick();
+assert.equal(vm.runInContext('likeView',ctx),null);
+assert.equal(node('workspace-scroll').scrollTop,0);
+assert.equal(node('list-pane').hidden,false);
+assert.equal(node('like-detail').hidden,true);
+const styles=fs.readFileSync(require('node:path').join(__dirname,'../web/workspaces.css'),'utf8');
+const pagingStatus='#message-workspace :is(#m-page,[data-group-progress],[data-like-progress])';
+assert(styles.includes(pagingStatus+'[data-loading="inline"]::before'));
+assert(!styles.includes(pagingStatus+'::before'));
 await vm.runInContext("state.type='mentions';state.session='';state.q='hello & UID';state.order='old';state.offset=50;load()",ctx);
 const url=new URL(requests.at(-1),'http://local');assert.equal(url.searchParams.get('q'),'hello & UID');assert.equal(url.searchParams.get('type'),'mentions');assert.equal(url.searchParams.get('order'),'old');assert.equal(url.searchParams.get('offset'),'0');
+await buttons.find(b=>b.dataset.type==='my_comments').onclick();
+assert.equal(node('my-comment-note').hidden,false);
+const pageHTML=fs.readFileSync(require('node:path').join(__dirname,'../web/index.html'),'utf8');
+assert.match(pageHTML, /id="m-my-comment-note"[^>]*>根据已归档的回复和点赞通知整理，仅包含能从这些通知找到的评论。<\/span><label class="search">/);
+assert(!node('items').innerHTML.includes('根据已归档的回复和点赞通知整理'));
+for(const option of ['回复最多','回复最少','被赞最多','被赞最少','发布时间倒序','发布时间正序'])assert(node('order').innerHTML.includes(option));
+assert.equal(node('order').value,'new');
+for(const order of ['replies_desc','replies_asc','likes_desc','likes_asc','published_desc','published_asc']){
+ node('order').value=order;
+ await node('order').onchange();
+ const request=new URL(requests.at(-1),'http://local');
+ assert.equal(request.searchParams.get('type'),'my_comments');
+ assert.equal(request.searchParams.get('q'),'hello & UID');
+ assert.equal(request.searchParams.get('offset'),'0');
+ assert.equal(request.searchParams.get('order'),order);
+}
+await buttons.find(b=>b.dataset.type==='mentions').onclick();
+assert.equal(node('my-comment-note').hidden,true);
+assert.equal(node('order').value,'old');
+await buttons.find(b=>b.dataset.type==='my_comments').onclick();
+assert.equal(node('order').value,'published_asc');
+ctx.sortedComment={...myCommentFixture,reply_total:0,like_count:9,like_count_from_notification:true};
+const sortedCard=vm.runInContext('renderItem(sortedComment)',ctx);
+assert(sortedCard.includes('回复 0'));
+assert(sortedCard.includes('通知点赞 9'));
+assert(sortedCard.includes('已归档的回复（1）'));
 account='99';await vm.runInContext("state.session='user_2';summary()",ctx);assert.equal(vm.runInContext('state.session',ctx),'');assert.equal(vm.runInContext('state.offset',ctx),1);
 fail=true;await vm.runInContext('load()',ctx);assert(node('error').textContent.includes('500'));
-console.log('PASS: message page initialization, filters, pagination, account switch, large IDs, escaped content, local attachments, safe links, paginated like users, four sidebar categories, combined private filter, group-first sessions/counts, count discrepancies and fetch errors');
+ console.log('PASS: message navigation, paging, account changes, private sessions, like details and my-comment links');
 })().catch(e=>{console.error(e);process.exitCode=1});

@@ -4,6 +4,7 @@ mod account_ui;
 mod library;
 mod local_read;
 mod offline;
+mod my_comments;
 mod portable_zip;
 mod archive;
 mod bili;
@@ -402,15 +403,10 @@ fn set_progress(ui: &Weak<AppWindow>, ratio: f32, text: String) {
     });
 }
 
-/// 把配置里的断点状态同步到界面（暂停后显示「继续采集」与提示）
+/// 同步断点操作按钮的显示状态。
 fn refresh_resume(shared: &Arc<Shared>, ui: &Weak<AppWindow>) {
-    let task = shared.checkpoint.lock().unwrap();
-    let has = task.is_some();
-    let text = task.as_ref().map(|t| t.summary()).unwrap_or_default();
-    emit(ui, move |w| {
-        w.set_has_resume(has);
-        w.set_resume_text(text.into());
-    });
+    let has = shared.checkpoint.lock().unwrap().is_some();
+    emit(ui, move |w| w.set_has_resume(has));
 }
 
 fn set_status(ui: &Weak<AppWindow>, text: String, ok: bool) {
@@ -755,7 +751,7 @@ fn persist_comment_progress(root:&std::path::Path,task:&checkpoint::Task,videos:
 fn comment_archive_failure(shared:&Arc<Shared>,ui:&Weak<AppWindow>,task:&checkpoint::Task,error:impl std::fmt::Display) {
     active_task(shared,ui,task);
     let text=format!("评论自动归档失败，断点已保留：{}",error);
-    push_log(shared,ui,&text);set_foot(ui,text.clone());set_status(ui,text.clone(),false);set_progress(ui,0.0,text);set_busy(shared,ui,false);
+    set_status(ui,text.clone(),false);set_progress(ui,0.0,text.clone());log_foot(shared,ui,text);set_busy(shared,ui,false);
 }
 
 /// Optional offline resources are independent of manual JSON export.
@@ -995,7 +991,9 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                 refresh_stats(&shared, &ui);
                 refresh_rows(&shared, &ui);
                 set_progress(&ui, 1.0, format!("稿件 {}", total));
-                set_foot(&ui, "稿件已载入，勾选后开始采集".into());
+                if shared.checkpoint.lock().unwrap().is_none() {
+                    set_foot(&ui, "稿件已载入，勾选后开始采集".into());
+                }
 
                 query_type_totals(&shared, &ui, &client, &collection::TYPES, &expected_cookie, uid, batch);
                 set_busy(&shared, &ui, false);
@@ -1146,7 +1144,7 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                 active_task(&shared, &ui, &task);
 
                 set_busy(&shared, &ui, true);
-                let mut failed = false;
+                let mut failure = None;
                 for index in 0..task.targets.len() {
                     if shared.cancel.load(Ordering::SeqCst) {
                         break;
@@ -1157,7 +1155,7 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                         continue;
                     }
                     let mut cursor = task.cursors.get(&key).cloned().unwrap_or_default();
-                    push_log(&shared, &ui, format!("采集：{}", video.display_title()));
+                    log_foot(&shared, &ui, format!("采集：{}", video.display_title()));
                     let result = client.comments_of_resume(
                         &mut video,
                         cfg.include_replies,
@@ -1175,16 +1173,13 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                             {
                                 shared.doc.lock().unwrap().merge_video(v.clone());
                             }
-                            set_progress(
-                                &ui,
-                                index as f32 / task.targets.len().max(1) as f32,
-                                format!(
-                                    "{}/{} · 已抓 {} 条评论",
-                                    index + 1,
-                                    task.targets.len(),
-                                    v.comments.len()
-                                ),
+                            let progress = format!(
+                                "稿件 {}/{} · 已保存 {} 条主评论 / {} 条回复",
+                                index + 1, task.targets.len(), v.comments.len(),
+                                v.comments.iter().map(|comment| comment.replies.len()).sum::<usize>()
                             );
+                            set_progress(&ui, index as f32 / task.targets.len().max(1) as f32, progress.clone());
+                            log_foot(&shared, &ui, progress);
                             Ok(())
                         },
                     );
@@ -1193,42 +1188,44 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                         Ok(())=>{
                             let mut next=task.clone();next.targets[index]=video.clone();next.cursors.insert(key.clone(),cursor);next.done.push(key);
                             if let Err(error)=persist_comment_progress(&output_root,&next,std::slice::from_ref(&video)) {
-                                push_log(&shared,&ui,format!("{error:#}"));failed=true;break;
+                                failure = Some(error);
+                                break;
                             }
                             task=next;
+                            log_foot(&shared, &ui, format!("已保存稿件 {}/{} · {}",
+                                task.done.len(), task.targets.len(), video.display_title()));
                         },
                         Err(error)=>{
                             if error.is::<CommentArchiveFailure>() || !shared.cancel.load(Ordering::SeqCst) {
-                                push_log(&shared,&ui,format!("采集失败，进度已保留：{error:#}"));failed=true;
+                                failure = Some(error);
                             }
                             break;
                         }
                     }
                     refresh_stats(&shared, &ui);
                 }
-                let stopped = !failed && shared.cancel.load(Ordering::SeqCst)
+                let stopped = failure.is_none() && shared.cancel.load(Ordering::SeqCst)
                     && !shared.pause_requested.load(Ordering::SeqCst);
-                let complete = !failed && task.complete();
+                let complete = failure.is_none() && task.complete();
                 if complete || stopped {
                     clear_checkpoint(&shared, &ui);
                 } else {
                     active_task(&shared, &ui, &task);
                 }
-                let message = if complete {
-                    "采集完成"
+                let message = if let Some(error) = &failure {
+                    format!("采集失败，进度已保留：{error:#}")
+                } else if complete {
+                    "采集完成".to_owned()
                 } else if stopped {
-                    "已结束"
-                } else if failed {
-                    "采集失败，进度已保留"
+                    "已结束".to_owned()
                 } else {
-                    "已暂停，进度已保留"
+                    format!("已暂停 · {}", task.summary())
                 };
                 set_busy(&shared, &ui, false);
                 refresh_stats(&shared, &ui);
-                set_progress(&ui, if complete { 1.0 } else { 0.0 }, message.into());
-                push_log(&shared, &ui, message);
-                set_foot(&ui, message.into());
-                if !failed {process_comment_resources(&shared, &ui, &task.targets,&output_root);}
+                set_progress(&ui, if complete { 1.0 } else { 0.0 }, message.clone());
+                log_foot(&shared, &ui, message);
+                if failure.is_none() {process_comment_resources(&shared, &ui, &task.targets,&output_root);}
             }
 
             Cmd::CrawlUp => {
@@ -1287,7 +1284,8 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                 let pace_min = cfg.interval_ms.clamp(200, 10000) as u64;
                 let pace_max = cfg.interval_max_ms.clamp(200, 10000) as u64;
                 let mut aborted = false;
-                let mut archive_failed=false;
+                let mut archive_failure = None;
+                let mut collection_failure = None;
                 for stage_index in 0..task.stages.len() {
                     while !task.stages[stage_index].done {
                         if shared.cancel.load(Ordering::SeqCst) {
@@ -1295,15 +1293,18 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                         }
                         if shared.cfg.lock().unwrap().sessdata != cfg.sessdata {
                             aborted = true;
+                            collection_failure = Some("登录账号已变更，原任务已保留".to_owned());
                             break;
                         }
                         let ty = task.stages[stage_index].ty;
                         let page = task.stages[stage_index].page;
                         let label = checkpoint::label(ty);
+                        let progress = format!("正在采集{label}第 {page} 页");
+                        set_foot(&ui, progress.clone());
                         set_progress(
                             &ui,
                             stage_index as f32 / task.stages.len().max(1) as f32,
-                            format!("{}第 {} 页", label, page),
+                            progress,
                         );
                         let result = client.up_list_page_retry(
                             ty,
@@ -1332,13 +1333,17 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                             Ok((page_rows, total)) => {
                                 verify_hide(&ui);
                                 set_type_total(&shared, &ui, ty, Some(total));
+                                let rows_on_page = page_rows.len();
                                 let changed:HashSet<_>=page_rows.iter().map(|row|(row.ty.max(1),row.oid)).collect();
                                 let mut next=task.clone();next.accept(ty,page,page_rows,total);
                                 let partial:Vec<_>=bili::rows_to_videos(&next.rows,cfg.include_replies,self_mid,&self_name).into_iter().filter(|v|changed.contains(&(v.reply_type(),v.aid))).collect();
                                 if let Err(error)=persist_comment_progress(&output_root,&next,&partial) {
-                                    push_log(&shared,&ui,format!("{error:#}"));archive_failed=true;aborted=true;break;
+                                    archive_failure = Some(error);
+                                    aborted = true;
+                                    break;
                                 }
                                 task=next;active_task(&shared,&ui,&task);
+                                log_foot(&shared, &ui, format!("已保存{label}第 {page} 页 · {rows_on_page} 条评论"));
                                 {
                                     let mut doc=shared.doc.lock().unwrap();
                                     for video in partial {doc.merge_video(video);}
@@ -1348,11 +1353,7 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                             Err(e) => {
                                 if !shared.cancel.load(Ordering::SeqCst) {
                                     aborted = true;
-                                    push_log(
-                                        &shared,
-                                        &ui,
-                                        format!("{}第 {} 页失败，进度已保留：{}", label, page, e),
-                                    );
+                                    collection_failure = Some(format!("{label}第 {page} 页失败，进度已保留：{e}"));
                                 }
                                 break;
                             }
@@ -1368,23 +1369,28 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                     }
                 }
                 verify_hide(&ui);
-                if archive_failed {comment_archive_failure(&shared,&ui,&task,"未推进失败页，请检查导出目录后继续采集");continue;}
+                if let Some(error) = archive_failure {
+                    comment_archive_failure(&shared, &ui, &task, format!("{error:#}"));
+                    continue;
+                }
                 let rows = task.rows.clone();
                 if rows.is_empty() {
-                    if task.complete()
-                        || (shared.cancel.load(Ordering::SeqCst)
-                            && !shared.pause_requested.load(Ordering::SeqCst))
-                    {
+                    let stopped = shared.cancel.load(Ordering::SeqCst)
+                        && !shared.pause_requested.load(Ordering::SeqCst);
+                    if task.complete() || stopped {
                         clear_checkpoint(&shared, &ui);
                     }
                     set_busy(&shared, &ui, false);
-                    let message = if task.complete() {
-                        "采集完成，暂无评论"
+                    let message = if let Some(failure) = collection_failure {
+                        failure
+                    } else if task.complete() {
+                        "采集完成，暂无评论".to_owned()
+                    } else if stopped {
+                        "已结束".to_owned()
                     } else {
-                        "采集未完成，进度已保留"
+                        format!("已暂停 · {}", task.summary())
                     };
-                    push_log(&shared, &ui, message);
-                    set_foot(&ui, message.into());
+                    log_foot(&shared, &ui, message);
                     continue;
                 }
 
@@ -1550,19 +1556,19 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                     active_task(&shared, &ui, &task);
                 }
                 set_busy(&shared, &ui, false);
-                let message = if task.complete() {
-                    "采集完成"
+                let message = if let Some(failure) = collection_failure {
+                    failure
+                } else if task.complete() {
+                    "采集完成".to_owned()
                 } else if stopped {
-                    "已结束"
-                } else if aborted {
-                    "采集失败，进度已保存"
+                    "已结束".to_owned()
                 } else {
-                    "已暂停，进度已保存"
+                    format!("已暂停 · {}", task.summary())
                 };
-                set_progress(&ui, if task.complete() { 1.0 } else { 0.0 }, message.into());
-                set_status(&ui, message.into(), task.complete());
-                push_log(&shared, &ui, message);
-                set_foot(
+                set_progress(&ui, if task.complete() { 1.0 } else { 0.0 }, message.clone());
+                set_status(&ui, message.clone(), task.complete());
+                log_foot(
+                    &shared,
                     &ui,
                     format!(
                         "{} · {} 个稿件 / {} 条评论 / {} 条回复",
@@ -2393,7 +2399,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 return;
             }
             clear_checkpoint(&shared, &weak);
-            push_log(&shared, &weak, "已清除断点，下次将从头开始采集");
+            log_foot(&shared, &weak, "已清除断点，下次将从头开始采集");
         });
     }
 
@@ -2851,7 +2857,7 @@ fn restore_checkpoint(shared: &Arc<Shared>, ui: &Weak<AppWindow>, uid: u64) {
             }
             let scope = if task.mode == "all" { 0 } else { 1 };
             emit(ui, move |w| w.set_scope(scope));
-            push_log(shared, ui, format!("已恢复采集进度：{}", task.summary()));
+            log_foot(shared, ui, format!("已恢复采集进度：{}", task.summary()));
             active_task(shared, ui, &task);
             refresh_rows(shared, ui);
             refresh_stats(shared, ui);
@@ -3053,7 +3059,7 @@ mod settings_component_tests {
         let saved = Rc::new(Cell::new(0));
         let c = saved.clone();
         ui.on_settings_apply(move || c.set(c.get() + 1));
-        click(&ui, 870., 450.); // blank inside the card
+        click(&ui, 855., 450.); // blank inside the card
         assert_eq!(closed.get(), 0, "card blank area must consume clicks");
         click(&ui, 455., ui.get_settings_dialog_top()+109.); // port input
         assert_eq!(closed.get(), 0, "editing a setting must not close the card");
@@ -3065,7 +3071,7 @@ mod settings_component_tests {
         );
         assert_eq!(closed.get(), 0, "Save must not close the card");
         assert!(ui.get_settings_visible());
-        click(&ui, 847., ui.get_settings_dialog_top()+34.);
+        click(&ui, 832., ui.get_settings_dialog_top()+34.);
         assert_eq!(closed.get(), 1, "header close button must close settings");
         click(&ui, 20., 450.);
         assert_eq!(closed.get(), 2, "outside overlay must also close settings");
@@ -3225,7 +3231,7 @@ mod settings_component_tests {
             let physical_width=(width as f32*scale).round() as u32;
             let physical_height=(height as f32*scale).round() as u32;
             window.set_size(slint::PhysicalSize::new(physical_width,physical_height));
-            let mut pixels=vec![slint::platform::software_renderer::Rgb8Pixel{r:0,g:0,b:0};physical_width as usize*physical_height as usize];
+            let mut pixels = vec![slint::Rgb8Pixel::default(); physical_width as usize * physical_height as usize];
             for (active,busy,loading) in [(0,false,false),(1,true,false),(2,true,false),(3,true,false),(0,true,true)] {
                 ui.set_active_task(active);ui.set_busy(busy);ui.set_loading_local(loading);
                 ui.set_workspace(0);ui.window().request_redraw();
@@ -3674,6 +3680,9 @@ fn pause_collection(shared:&Arc<Shared>,ui:&Weak<AppWindow>) {
     if shared.loading_local.load(Ordering::SeqCst) || shared.active_task.load(Ordering::SeqCst)==0 {return;}
     shared.pause_requested.store(true,Ordering::SeqCst);
     shared.cancel.store(true,Ordering::SeqCst);
+    if shared.active_task.load(Ordering::SeqCst) == 1 {
+        set_foot(ui, "正在暂停，保留进度…".into());
+    }
     emit(ui,|w|{w.set_progress_text("正在暂停，保留进度…".into());});
 }
 fn stop_collection(shared:&Arc<Shared>,ui:&Weak<AppWindow>) {
@@ -3681,5 +3690,8 @@ fn stop_collection(shared:&Arc<Shared>,ui:&Weak<AppWindow>) {
     shared.pause_requested.store(false,Ordering::SeqCst);
     shared.cancel.store(true,Ordering::SeqCst);
     if !shared.message_active.load(Ordering::SeqCst) {clear_checkpoint(shared,ui);}
+    if shared.active_task.load(Ordering::SeqCst) == 1 {
+        set_foot(ui, "正在结束…".into());
+    }
     emit(ui,|w|{w.set_progress_text("正在结束…".into());});
 }
