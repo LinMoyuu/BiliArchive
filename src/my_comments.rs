@@ -387,14 +387,20 @@ struct CommentGroup<'a> {
     notified_likes: Option<u64>,
 }
 
-pub fn page<'a>(
+struct RankedComment<'a> {
+    rpid: &'a str,
+    group: CommentGroup<'a>,
+    detail: Option<Detail>,
+    defer_detail: bool,
+    sort_key: Option<u64>,
+}
+
+fn ranked_comments<'a>(
     items: impl IntoIterator<Item = &'a Item>,
     q: &str,
     order: Order,
-    offset: usize,
-    limit: usize,
-    mut detail: impl FnMut(&str) -> Option<Detail>,
-) -> (usize, Vec<Value>) {
+    detail: &mut impl FnMut(&str) -> Option<Detail>,
+) -> Vec<RankedComment<'a>> {
     let mut groups = BTreeMap::new();
     for item in items.into_iter().filter(|item| {
         valid_id(&item.my_comment_rpid) && matches!(item.ty.as_str(), "replies" | "likes")
@@ -434,9 +440,9 @@ pub fn page<'a>(
     let read_for_sort = !matches!(order.field, SortField::Interaction);
     let mut matches = Vec::new();
     for (rpid, group) in groups {
-        let full = (read_for_sort || !needle.is_empty())
-            .then(|| detail(rpid))
-            .flatten();
+        let interaction = (group.item.timestamp > 0).then_some(group.item.timestamp);
+        let defer_detail = !read_for_sort && needle.is_empty() && interaction.is_some();
+        let full = (!defer_detail).then(|| detail(rpid)).flatten();
         let (_, excerpt) = group.excerpt;
         let text = full.as_ref().map_or(excerpt, |d| d.display_text(excerpt));
         let raw = &group.item.raw["item"];
@@ -447,8 +453,9 @@ pub fn page<'a>(
         {
             continue;
         }
+        let published = full.as_ref().map(|d| d.timestamp).filter(|&time| time > 0);
         let key = match order.field {
-            SortField::Interaction => Some(group.item.timestamp),
+            SortField::Interaction => interaction.or(published),
             SortField::Replies => Some(
                 full.as_ref()
                     .and_then(|d| d.reply_count)
@@ -458,37 +465,108 @@ pub fn page<'a>(
                 .as_ref()
                 .and_then(|d| d.like_count)
                 .or(group.notified_likes),
-            SortField::Published => full
-                .as_ref()
-                .map(|d| d.timestamp)
-                .filter(|value| *value > 0),
+            SortField::Published => published.or(interaction),
         };
-        matches.push((rpid, group, full, key));
+        matches.push(RankedComment { rpid, group, detail: full, defer_detail, sort_key: key });
     }
-    matches.sort_unstable_by(
-        |(left_id, left, _, left_key), (right_id, right, _, right_key)| {
-            order
-                .compare(*left_key, *right_key)
-                .then_with(|| right.item.timestamp.cmp(&left.item.timestamp))
-                .then_with(|| (right_id.len(), right_id).cmp(&(left_id.len(), left_id)))
-        },
-    );
-    let total = matches.len();
-    let rows = matches.into_iter().skip(offset).take(limit).map(|(rpid, group, mut full, _)| {
-        if !read_for_sort && needle.is_empty() { full = detail(rpid); }
-        let CommentGroup { item, excerpt: (_, excerpt), sources, replies, notified_likes } = group;
-        let text = full.as_ref().map_or(excerpt, |d| d.display_text(excerpt));
+    matches.sort_unstable_by(|left, right| {
+        order
+            .compare(left.sort_key, right.sort_key)
+            .then_with(|| right.group.item.timestamp.cmp(&left.group.item.timestamp))
+            .then_with(|| (right.rpid.len(), right.rpid).cmp(&(left.rpid.len(), left.rpid)))
+    });
+    matches
+}
+
+impl RankedComment<'_> {
+    fn subject(&self) -> Option<crate::message_subjects::Subject> {
+        crate::message_subjects::resolve(self.group.item)
+    }
+
+    fn row(&self, detail: &mut impl FnMut(&str) -> Option<Detail>) -> Value {
+        let loaded = self.defer_detail.then(|| detail(self.rpid)).flatten();
+        let full = self.detail.as_ref().or(loaded.as_ref());
+        let CommentGroup { item, excerpt: (_, excerpt), sources, replies, notified_likes } = &self.group;
+        let text = full.map_or(*excerpt, |d| d.display_text(excerpt));
         let raw = &item.raw["item"];
-        let subject = crate::message_subjects::resolve(item);
-        let reply_total = full.as_ref().and_then(|d| d.reply_count);
-        let site_likes = full.as_ref().and_then(|d| d.like_count);
-        json!({"id":rpid,"type":VIEW,"timestamp":item.timestamp,
+        let reply_total = full.and_then(|d| d.reply_count);
+        let site_likes = full.and_then(|d| d.like_count);
+        json!({"id":self.rpid,"type":VIEW,"timestamp":item.timestamp,
             "text":text,"sources":sources,"reply_count":replies.len(),"my_comment":full,
-            "reply_total":reply_total,"like_count":site_likes.or(notified_likes),
+            "reply_total":reply_total,"like_count":site_likes.or(*notified_likes),
             "like_count_from_notification":site_likes.is_none() && notified_likes.is_some(),
-            "subject":subject,"raw":{"item":{"native_uri":raw["native_uri"],"uri":raw["uri"],"type":"reply"}},"url":item.url})
+            "subject":self.subject(),"raw":{"item":{"native_uri":raw["native_uri"],"uri":raw["uri"],"type":"reply"}},"url":item.url})
+    }
+}
+
+pub fn page<'a>(
+    items: impl IntoIterator<Item = &'a Item>,
+    q: &str,
+    order: Order,
+    offset: usize,
+    limit: usize,
+    detail: impl FnMut(&str) -> Option<Detail>,
+) -> (usize, Vec<Value>) {
+    member_page(items, q, order, None, offset, limit, detail)
+}
+
+pub fn member_page<'a>(
+    items: impl IntoIterator<Item = &'a Item>,
+    q: &str,
+    order: Order,
+    subject_key: Option<&str>,
+    offset: usize,
+    limit: usize,
+    mut detail: impl FnMut(&str) -> Option<Detail>,
+) -> (usize, Vec<Value>) {
+    let mut matches = ranked_comments(items, q, order, &mut detail);
+    if let Some(key) = subject_key {
+        matches.retain(|row| row.subject().is_some_and(|subject| subject.key == key));
+    }
+    let rows = matches.iter().skip(offset).take(limit)
+        .map(|row| row.row(&mut detail)).collect();
+    (matches.len(), rows)
+}
+
+pub fn subject_page<'a>(
+    items: impl IntoIterator<Item = &'a Item>,
+    q: &str,
+    order: Order,
+    offset: usize,
+    limit: usize,
+    mut detail: impl FnMut(&str) -> Option<Detail>,
+) -> (usize, usize, Vec<Value>) {
+    struct Topic {
+        first: usize,
+        count: usize,
+        subject: Option<crate::message_subjects::Subject>,
+    }
+    let matches = ranked_comments(items, q, order, &mut detail);
+    let mut topics: Vec<Topic> = Vec::new();
+    let mut indices = BTreeMap::new();
+    for (index, row) in matches.iter().enumerate() {
+        let subject = row.subject();
+        if let Some(subject) = &subject {
+            if let Some(&topic) = indices.get(&subject.key) {
+                let topic: &mut Topic = &mut topics[topic];
+                topic.subject.as_mut().unwrap().merge(subject);
+                topic.count += 1;
+                continue;
+            }
+            indices.insert(subject.key.clone(), topics.len());
+        }
+        topics.push(Topic { first: index, count: 1, subject });
+    }
+    let groups = topics.iter().skip(offset).take(limit).map(|topic| {
+        if let Some(subject) = &topic.subject {
+            json!({"key":subject.key,"subject":subject,"count":topic.count,"standalone":false})
+        } else {
+            let row = &matches[topic.first];
+            json!({"key":format!("my-comment:{}", row.rpid),"standalone":true,
+                "count":1,"item":row.row(&mut detail)})
+        }
     }).collect();
-    (total, rows)
+    (topics.len(), matches.len(), groups)
 }
 
 #[cfg(test)]
@@ -623,7 +701,7 @@ mod tests {
             ("likes_desc", ["103", "102", "101", "105", "104"]),
             ("likes_asc", ["101", "102", "103", "105", "104"]),
             ("published_desc", ["101", "102", "105", "104", "103"]),
-            ("published_asc", ["102", "101", "105", "104", "103"]),
+            ("published_asc", ["103", "105", "104", "102", "101"]),
         ] {
             let (total, rows) = page(&items, "", Order::parse(key).unwrap(), 0, 20, details);
             assert_eq!(total, 5, "{key}");
@@ -645,6 +723,72 @@ mod tests {
         assert!(first[0]["reply_total"].is_null());
         assert_eq!(second[0]["reply_total"], 0);
         assert_eq!(second[0]["like_count"], 0);
+
+        let time_items = [
+            notice("101", "1", 10, None, ""), // published 200, interaction 10
+            notice("102", "2", 0, None, ""),  // published 100, no interaction
+            notice("103", "3", 100, None, ""), // interaction ties with 102's fallback
+            notice("104", "4", 50, None, ""),
+            notice("105", "5", 0, None, ""),  // both missing
+        ];
+        for (key, expected) in [
+            ("published_desc", ["101", "103", "102", "104", "105"]),
+            ("published_asc", ["104", "103", "102", "101", "105"]),
+            ("new", ["103", "102", "104", "101", "105"]),
+            ("old", ["101", "104", "103", "102", "105"]),
+        ] {
+            let order = Order::parse(key).unwrap();
+            let (total, first) = page(&time_items, "", order, 0, 2, details);
+            let (_, second) = page(&time_items, "", order, 2, 3, details);
+            assert_eq!(total, 5);
+            assert_eq!(
+                first.iter().chain(&second).map(|row| row["id"].as_str().unwrap()).collect::<Vec<_>>(),
+                expected, "{key}"
+            );
+        }
+
+        let mut reads = Vec::new();
+        let (_, rows) = page(&time_items, "", Order::parse("new").unwrap(), 1, 1, |id| {
+            reads.push(id.to_owned());
+            details(id)
+        });
+        assert_eq!(reads, ["102", "105"]);
+        assert_eq!(rows[0]["timestamp"], 0);
+        assert_eq!(rows[0]["my_comment"]["timestamp"], 100);
+    }
+
+    #[test]
+    fn own_subject_groups_deduplicate_before_paging_and_preserve_member_order() {
+        let notice = |rpid: &str, time: u64, url: &str, text: &str| Item {
+            id: time.to_string(),
+            ty: "replies".into(),
+            timestamp: time,
+            my_comment_rpid: rpid.into(),
+            url: url.into(),
+            raw: json!({"item":{"type":"reply","title":"same topic title","target_reply_content":text}}),
+            ..Item::default()
+        };
+        let items = [
+            notice("101", 40u64, "https://www.bilibili.com/video/BV17x411w7KC", "needle"),
+            notice("101", 35u64, "https://www.bilibili.com/video/av170001", "needle"),
+            notice("102", 10u64, "https://www.bilibili.com/video/av170001", "needle"),
+            notice("103", 30u64, "https://t.bilibili.com/170001", "needle"),
+            notice("104", 20u64, "", "needle"),
+            notice("105", 50u64, "https://t.bilibili.com/170001", "other"),
+        ];
+        let order = Order::parse("new").unwrap();
+        let (total, comments, first) = subject_page(&items, "needle", order, 0, 1, |_| None);
+        assert_eq!((total, comments), (3, 4));
+        assert_eq!(first[0]["count"], 2);
+        let key = first[0]["key"].as_str().unwrap();
+        let (_, _, later) = subject_page(&items, "needle", order, 1, 2, |_| None);
+        assert_eq!(later[0]["subject"]["type"], "dynamic");
+        assert_eq!(later[1]["item"]["id"], "104");
+        let (total, members) = member_page(&items, "needle", order, Some(key), 1, 1, |_| None);
+        assert_eq!(total, 2);
+        assert_eq!(members[0]["id"], "102");
+        let (_, members) = member_page(&items, "needle", Order::parse("old").unwrap(), Some(key), 0, 1, |_| None);
+        assert_eq!(members[0]["id"], "102");
     }
 
     #[test]

@@ -120,6 +120,20 @@ async function verifyDiskPreview() {
   await searched;
   assert.equal(vm.runInContext("videoHitsQuery(state.doc.videos[1], 'from replies')",ctx),true);
   assert.equal(vm.runInContext("videoHitsQuery(state.doc.videos[0], 'from replies')",ctx),false);
+  let focused = false;
+  nodes.get('q').focus = () => { focused = true; };
+  vm.runInContext("Object.assign(state,{filter:'public',type:'video',videoSort:'old'}); $('q').value='stale'; $('q').oninput()",ctx);
+  await new Promise(resolve=>setTimeout(resolve,200));
+  assert.equal(requests[4].url,'/api/comments/data.json?view=search&q=stale');
+  assert.equal(nodes.get('qClear').hidden,false);
+  await nodes.get('qClear').onclick();
+  assert.equal(requests[4].signal.aborted,true);
+  assert.equal(nodes.get('q').value,'');
+  assert.equal(nodes.get('qClear').hidden,true);
+  assert.equal(focused,true);
+  requests[4].resolve(['video-116644617717979']);
+  await new Promise(setImmediate);
+  assert.equal(vm.runInContext("JSON.stringify([state.vq,state.filter,state.type,state.videoSort,matchedKeys])",ctx),'["","public","video","old",null]');
   console.log('PASS: on-demand details, deep links, aborted stale responses, and archive-wide search');
 }
 verifyDiskPreview().catch(error=>{console.error(error);process.exitCode=1;});

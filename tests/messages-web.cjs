@@ -119,9 +119,10 @@ assert.equal(node('my-comment-note').hidden,false);
 const pageHTML=fs.readFileSync(require('node:path').join(__dirname,'../web/index.html'),'utf8');
 assert.match(pageHTML, /id="m-my-comment-note"[^>]*>根据已归档的回复和点赞通知整理，仅包含能从这些通知找到的评论。<\/span><label class="search">/);
 assert(!node('items').innerHTML.includes('根据已归档的回复和点赞通知整理'));
-for(const option of ['回复最多','回复最少','被赞最多','被赞最少','发布时间倒序','发布时间正序'])assert(node('order').innerHTML.includes(option));
-assert.equal(node('order').value,'new');
-for(const order of ['replies_desc','replies_asc','likes_desc','likes_asc','published_desc','published_asc']){
+assert.deepEqual([...node('order').innerHTML.matchAll(/<option value="[^"]+">([^<]+)<\/option>/g)].map(match=>match[1]),
+ ['发布时间倒序','发布时间正序','回复最多','回复最少','点赞最多','点赞最少','最近互动倒序','最近互动正序']);
+assert.equal(node('order').value,'published_desc');
+for(const order of ['new','old','replies_desc','replies_asc','likes_desc','likes_asc','published_desc','published_asc']){
  node('order').value=order;
  await node('order').onchange();
  const request=new URL(requests.at(-1),'http://local');
@@ -137,10 +138,12 @@ await buttons.find(b=>b.dataset.type==='my_comments').onclick();
 assert.equal(node('order').value,'published_asc');
 ctx.sortedComment={...myCommentFixture,reply_total:0,like_count:9,like_count_from_notification:true};
 const sortedCard=vm.runInContext('renderItem(sortedComment)',ctx);
+assert.match(sortedCard,/<time>发布于 [^<]+<\/time><time>最近互动 /);
 assert(sortedCard.includes('回复 0'));
 assert(sortedCard.includes('通知点赞 9'));
 assert(sortedCard.includes('已归档的回复（1）'));
 account='99';await vm.runInContext("state.session='user_2';summary()",ctx);assert.equal(vm.runInContext('state.session',ctx),'');assert.equal(vm.runInContext('state.offset',ctx),1);
+assert.equal(node('order').value,'published_desc');
 fail=true;await vm.runInContext('load()',ctx);assert(node('error').textContent.includes('500'));
  console.log('PASS: message navigation, paging, account changes, private sessions, like details and my-comment links');
 })().catch(e=>{console.error(e);process.exitCode=1});

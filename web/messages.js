@@ -11,13 +11,14 @@ const $=id=>document.getElementById(id);
 const loading=(node,mode,label,valid)=>globalThis.archiveLoading?.begin(node,mode,label,valid);
 const state={type:'replies',session:'',q:'',order:'new',offset:0,limit:50,total:0,uid:'',request:0};
 const sessionNames=new Map();let privateSelection='',privateSessionTop=0;
-const groupingModes={replies:'flat',mentions:'flat'};
+const groupingModes={replies:'flat',mentions:'flat',my_comments:'flat'};
 const groupSorts={replies:'time',mentions:'time'};
 let likeOrder='new';
-let myCommentOrder='new';
+const defaultMyCommentOrder='published_desc';
+let myCommentOrder=defaultMyCommentOrder;
 const myCommentOrders={
- new:'最近互动倒序',old:'最近互动正序',replies_desc:'回复最多',replies_asc:'回复最少',
- likes_desc:'被赞最多',likes_asc:'被赞最少',published_desc:'发布时间倒序',published_asc:'发布时间正序'
+ published_desc:'发布时间倒序',published_asc:'发布时间正序',replies_desc:'回复最多',replies_asc:'回复最少',
+ likes_desc:'点赞最多',likes_asc:'点赞最少',new:'最近互动倒序',old:'最近互动正序'
 };
 function listOrder(){return state.type==='my_comments'?myCommentOrder:state.type==='likes'?likeOrder:state.order;}
 // Page requests share a bounded queue; only automatic work pauses while hidden.
@@ -192,7 +193,7 @@ function subjectMissing(s){const has=value=>typeof value==='string'&&!!value.tri
 function subjectReason(label,reason,classes=''){
  return reason?`<span class="subject-reason ${classes}" tabindex="0" role="note" aria-label="${esc(label+'：'+reason)}" data-reason="${esc(reason)}">${esc(label)}</span>`:`<span class="${classes}">${esc(label)}</span>`;
 }
-function subjectContent(s,mode){
+function subjectContent(s,mode,source=''){
  if(mode==='cover'||mode==='like-cover'){const cover=imageURL(s.cover);return cover?`<a class="group-cover-link" href="${esc(cover)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"><span class="archive-image-slot"><img data-group-cover data-archive-src="${esc(resourceImages.get(cover)||(s.cover_src?.startsWith('/api/messages/attachments/')?s.cover_src:cover))}" data-original="${esc(cover)}" data-archive-original="${esc(cover)}" alt="主题封面" loading="lazy" referrerpolicy="no-referrer"></span></a>`:mode==='like-cover'?'':'<span class="group-cover-placeholder" aria-label="暂无封面"></span>';}
  const video=s.type==='video',dynamic=s.type==='dynamic';
  const ident=video?(s.bvid||(s.id?'av'+s.id:'')):s.id?(dynamic?'动态 ':'专栏 ')+s.id:'';
@@ -208,16 +209,17 @@ function subjectContent(s,mode){
  const status=limited?subjectReason('暂受限',reason,'subject-status'):value&&actionable?subjectReason(busy?'正在获取'+field+'…':field+'未获取',reason,'subject-status'):'';
  const retry=actionable&&!busy?`<button data-subject-retry aria-label="重试获取${esc(field)}">重试</button>`:'';
  const actions=status||retry?`<span class="subject-retry-row">${status}${retry}</span>`:'';
- const line=`<span class="subject-line">${label}${identifier}${actions}</span>`;
+ const line=`<span class="subject-line">${label}${identifier}${commentSource(source)}${actions}</span>`;
  if(mode!=='body')return line;
  if(!value||dynamic&&!String(s.text||'').trim())return `<div class="reply-subject subject-empty">${line}</div>`;
  return `<details class="reply-subject"><summary aria-label="${dynamic?'动态主题':'所属主题'}">${line}</summary><div class="subject-text">${esc(value)}</div>${link(s.url,'查看主题')}</details>`;
 }
 
-function subjectHTML(i,mode){
+function commentSource(source){return source?`<span class="my-comment-source">${esc(source)}</span>`:'';}
+function subjectHTML(i,mode,source=''){
  const s=rememberSubject(i.subject);
  if(s&&mode==='heading'&&s.type!=='video')return '';
- if(s){const tag=mode==='body'?'div':'span';return `<${tag} class="subject-slot" data-subject-key="${esc(s.key)}" data-subject-mode="${mode}">${subjectContent(s,mode)}</${tag}>`;}
+ if(s){const tag=mode==='body'?'div':'span';return `<${tag} class="subject-slot" data-subject-key="${esc(s.key)}" data-subject-mode="${mode}"${source?` data-comment-source="${esc(source)}"`:''}>${subjectContent(s,mode,source)}</${tag}>`;}
  const raw=i.raw?.item||{};
  const url=i.url||raw.uri||'',videoPath=String(url).match(/\/video\/(BV[a-zA-Z0-9]{10}|av[0-9]+)(?:[/?#]|$)/)?.[1]||'';
  if(mode==='heading'&&raw.type==='video')return subjectContent({type:'video',title:raw.title||'',url,bvid:raw.bvid||(videoPath.startsWith('BV')?videoPath:''),id:/^[0-9]+$/.test(String(raw.subject_id||''))?String(raw.subject_id):videoPath.startsWith('av')?videoPath.slice(2):'',cover_checked:true},mode);
@@ -246,7 +248,7 @@ function refreshSubjectNodes(key){
  for(const root of subjectRoots())root.querySelectorAll('[data-subject-key]').forEach(node=>{
   if(key&&node.dataset.subjectKey!==key)return;
   const subject=subjectData.get(node.dataset.subjectKey);if(!subject)return;
-  const html=subjectContent(subject,node.dataset.subjectMode);
+  const html=subjectContent(subject,node.dataset.subjectMode,node.dataset.commentSource);
   if(node._subjectHTML===html)return;
   const opened=node.querySelector('details')?.open;
   node.innerHTML=html;
@@ -724,7 +726,7 @@ function renderMyComment(i){
  const likes=i.like_count!=null?`<span>${i.like_count_from_notification?'通知点赞':'被赞'} ${esc(i.like_count)}</span>`:'';
  const opened=i.reply_count?`<details data-my-comment="${esc(i.id)}"><summary>已归档的回复（${esc(i.reply_count)}）</summary><div data-my-comment-replies></div><small data-my-comment-error role="status"></small><button type="button" data-my-comment-more>加载回复</button></details>`:'';
  const text=i.text||(pictures?'':'评论正文未归档');
- return `<article class="reply-notice my-comment"><div class="reply-content"><div class="reply-heading"><span>${esc(source)}</span>${detail?'':'<span>仅有通知摘要</span>'}${subjectHTML(i,'heading')}</div><div class="reply-body">${esc(text)}</div>${pictures}<div class="reply-footer"><time>最近互动 ${esc(replyTime(i.timestamp))}</time>${detail?.timestamp?`<time>发布于 ${esc(replyTime(detail.timestamp))}</time>`:''}${replies}${likes}${link(target,target.includes('#reply')?'查看评论':'查看主题')}</div>${opened}</div></article>`;
+ return `<article class="reply-notice my-comment"><div class="reply-content"><div class="reply-heading">${subjectHTML(i,'my-comment',source)||commentSource(source)}${detail?'':'<span>仅有通知摘要</span>'}</div><div class="reply-body">${esc(text)}</div>${pictures}<div class="reply-footer">${detail?.timestamp?`<time>发布于 ${esc(replyTime(detail.timestamp))}</time>`:''}<time>最近互动 ${esc(replyTime(i.timestamp))}</time>${replies}${likes}${link(target,target.includes('#reply')?'查看评论':'查看主题')}</div>${opened}</div></article>`;
 }
 function renderItem(i){return i.type==='replies'?renderReply(i):i.type==='likes'?renderLikeNotice(i):i.type==='my_comments'?renderMyComment(i):renderNotice(i)}
 function bindMyComments(root){
@@ -755,7 +757,7 @@ function bindMyComments(root){
 
 function pagination(){
  const unit=grouping()==='flat'?'条':'项';
- $('page').textContent=`${privateSearch()?'全部会话搜索 · ':''}已加载 ${stream.loaded}${stream.hasTotal?' / '+state.total:''} ${unit}${grouping()!=='flat'&&stream.hasTotal?' · '+stream.totalItems+' 条消息':''}${stream.done?' · 已全部加载':''}`;
+ $('page').textContent=`${privateSearch()?'全部会话搜索 · ':''}已加载 ${stream.loaded}${stream.hasTotal?' / '+state.total:''} ${unit}${grouping()!=='flat'&&stream.hasTotal?' · '+stream.totalItems+(state.type==='my_comments'?' 条评论':' 条消息'):''}${stream.done?' · 已全部加载':''}`;
  $('more').hidden=stream.done&&!stream.error;$('more').disabled=stream.busy||stream.request!==state.request;
  $('more').textContent=stream.busy?'读取中…':stream.error?'重试加载':'加载更多';
  if(stream.done||stream.error||likeView)unwatch($('sentinel'));else if(!stream.busy&&stream.request===state.request)watch($('sentinel'),()=>loadMore(true));
@@ -781,12 +783,13 @@ async function loadMessageGroup(detail,automatic=false){
  cache.busy=true;cache.error='';renderGroupBody(detail,cache);
  const finish=loading(cache.loaded?cache.progress:cache.content,cache.loaded?'inline':'skeleton','正在读取分组消息',()=>current()&&detail.open);
  try{
-  const params=new URLSearchParams({type,group_by:mode,group_key:key,q:state.q,order:detail.dataset.order||state.order,offset:String(offset),limit:'50'});
+  const params=new URLSearchParams({type,group_by:mode,group_key:key,q:state.q,order:detail.dataset.order||listOrder(),offset:String(offset),limit:'50'});
   const d=await pageRequest('/api/messages/items?'+params,()=>current()&&detail.open,automatic);if(!d||!current())return;
   if(d.account_uid!==uid){await summary();return;}
   const rows=d.items||[],fresh=[];
   for(const row of rows){const id=row.type+':'+row.id;if(!cache.seen.has(id)){cache.seen.add(id);fresh.push(row);cache.items.push(row);}}
   appendHTML(cache.content,fresh.map(renderItem).join(''));bindReplyImages(cache.content);bindRawActions(cache.content);hydrateSubjects();
+  if(type==='my_comments')bindMyComments(cache.content);
   cache.total=d.total;cache.next=offset+rows.length;cache.done=!rows.length||cache.next>=d.total;cache.loaded=true;
  }catch(e){if(current())cache.error=e.message;}
  finally{finish?.();cache.busy=false;if(current())renderGroupBody(detail,cache);}
@@ -804,6 +807,7 @@ function renderGroups(groups,totalItems,append=false){
  }).join(''));
  $('items').querySelectorAll('[data-group-key]').forEach(detail=>{if(detail.dataset.groupBound)return;detail.dataset.groupBound='true';detail.ontoggle=()=>{const cache=groupCache.get(detail.dataset.groupKey);if(!cache)return;if(!detail.open){unwatch(cache.sentinel);pumpPages();}else if(!cache.loaded)return loadMessageGroup(detail);else renderGroupBody(detail,cache);};});
  bindReplyImages($('items'));bindRawActions($('items'));hydrateSubjects();
+ if(state.type==='my_comments')bindMyComments($('items'));
 }
 
 const names={private:'私信',groups:'粉丝团',likes:'收到的赞',replies:'回复我的',mentions:'@我的'};
@@ -823,7 +827,7 @@ function rememberFirstPage(url,data){
  firstPages.set(url,{data,expires:Date.now()+30000});
  if(firstPages.size>8)firstPages.delete(firstPages.keys().next().value);
 }
-function clearAccount(uid){latestSummary=null;renderedSessions=null;firstPages.clear();likeOrder='new';myCommentOrder='new';privateSelection='';privateSessionTop=0;resetProfiles();resetChats();sessionInfo.clear();closeLikeView(false);likeCards.clear();$('like-detail').innerHTML='';sessionNames.clear();resetSubjects();expectedUid=String(uid||'');++summaryRequest;++state.request;invalidateGroups();groupingModes.replies='flat';groupingModes.mentions='flat';groupSorts.replies=groupSorts.mentions='time';$('header-stats').innerHTML='';state.uid='';state.session='';state.offset=0;state.total=0;$('items').innerHTML='';$('sessions').innerHTML='';renderAttachmentStats();$('error').textContent='';$('page').textContent='';$('more').disabled=true;return summary();}
+function clearAccount(uid){latestSummary=null;renderedSessions=null;firstPages.clear();likeOrder='new';myCommentOrder=defaultMyCommentOrder;privateSelection='';privateSessionTop=0;resetProfiles();resetChats();sessionInfo.clear();closeLikeView(false);likeCards.clear();$('like-detail').innerHTML='';sessionNames.clear();resetSubjects();expectedUid=String(uid||'');++summaryRequest;++state.request;invalidateGroups();groupingModes.replies=groupingModes.mentions=groupingModes.my_comments='flat';groupSorts.replies=groupSorts.mentions='time';$('header-stats').innerHTML='';state.uid='';state.session='';state.offset=0;state.total=0;$('items').innerHTML='';$('sessions').innerHTML='';renderAttachmentStats();$('error').textContent='';$('page').textContent='';$('more').disabled=true;return summary();}
 function safeURL(value){try{const u=new URL(value,location.href);return ['http:','https:'].includes(u.protocol)?u.href:''}catch{return ''}}
 function link(url,title){const href=safeURL(url);return href?`<a href="${esc(href)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">${title}</a>`:''}
 async function get(url,signal){const response=await fetch(url,{signal,cache:'no-store'});if(!response.ok)throw new Error(`读取失败（${response.status}）`);return response.json()}
@@ -839,7 +843,11 @@ function controls(){
  renderAttachmentStats();
  $('my-comment-note').hidden=state.type!=='my_comments';
  $('session-pane').hidden=state.type!=='private';messageScrollRoot().classList?.[state.type==='private'?'add':'remove']('private-active');
-document.querySelectorAll('#types button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.type===state.type)));$('grouping').hidden=!['replies','mentions'].includes(state.type);document.querySelectorAll('#grouping button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.group===grouping())));
+document.querySelectorAll('#types button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.type===state.type)));$('grouping').hidden=!Object.hasOwn(groupingModes,state.type);
+ document.querySelectorAll('#grouping button').forEach(b=>{
+  b.hidden=state.type==='my_comments'&&b.dataset.group==='user';
+  b.setAttribute('aria-pressed',String(b.dataset.group===grouping()));
+ });
  if(state.type==='private')$('sessions').querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.session===(privateSearch()?'':state.session))));
  const noun=state.type==='replies'?'回复次数':'@次数';
  $('order').innerHTML=state.type==='my_comments'
@@ -939,7 +947,7 @@ function load(reuseFirstPage=false, retain=false){if(!retain||!privateChat())hid
 
 function adoptMessageAccount(uid){
  if(state.uid===uid)return false;
- likeOrder='new';myCommentOrder='new';privateSelection='';privateSessionTop=0;
+ likeOrder='new';myCommentOrder=defaultMyCommentOrder;groupingModes.my_comments='flat';privateSelection='';privateSessionTop=0;
  latestSummary=null;renderedSessions=null;firstPages.clear();
  resetProfiles();resetChats();sessionInfo.clear();sessionNames.clear();
  closeLikeView(false);likeCards.clear();$('like-detail').innerHTML='';
@@ -1034,7 +1042,9 @@ function switchCategory(type){
  return ready.then(()=>stream.request===state.request?undefined:summary(undefined,{eager:true}));
 }
 document.querySelectorAll('#types button').forEach(button=>button.onclick=()=>switchCategory(button.dataset.type));
-document.querySelectorAll('#grouping button').forEach(b=>b.onclick=()=>{if(grouping()===b.dataset.group)return;groupingModes[state.type]=b.dataset.group;state.offset=0;return load();});
+document.querySelectorAll('#grouping button').forEach(b=>b.onclick=()=>{if(b.hidden||grouping()===b.dataset.group)return;
+ if(timer!==undefined){clearTimeout(timer);timer=undefined;state.q=$('q').value;}
+ groupingModes[state.type]=b.dataset.group;return load();});
 let timer;$('q').oninput=()=>{clearTimeout(timer);timer=setTimeout(()=>{timer=undefined;state.q=$('q').value;state.offset=0;load(false,true)},200)};
 $('order').onchange=()=>{
  const value=$('order').value;

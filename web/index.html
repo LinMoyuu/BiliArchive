@@ -6,14 +6,14 @@
     <a class="btn" href="/api/comments/archive.json" target="_blank" rel="noopener">JSON</a>
     <a class="btn" href="/api/comments/posts" target="_blank" rel="noopener">稿件列表</a>
   </div>
-</div><div id="message-header" hidden><div id="header-stats" class="stats" aria-label="消息归档统计"></div></div><div class="web-account"><button id="account-toggle" aria-haspopup="dialog" aria-controls="account-menu" aria-expanded="false"><span class="account-photo"><span id="account-fallback"><svg viewBox="0 0 30 30" aria-hidden="true"><circle cx="15" cy="10" r="5"/><path d="M5 28v-4a10 10 0 0 1 20 0v4"/></svg><img id="account-default-avatar" src="/assets/noface.jpg" alt="默认头像" referrerpolicy="no-referrer"></span><img id="account-avatar" alt="用户头像" referrerpolicy="no-referrer" hidden></span><span id="account-name">未登录</span><svg class="chevron" viewBox="0 0 10 6" aria-hidden="true"><path d="M0 0h10L5 6Z"/></svg></button><div id="account-menu" role="dialog" aria-label="账号信息" tabindex="-1" hidden><strong id="account-menu-name" hidden></strong><span id="account-uid">请在桌面应用右上角登录</span></div></div></header>
+</div><div id="message-header" hidden><div id="header-stats" class="stats" aria-label="消息归档统计"></div></div><div class="web-account"><button type="button" class="account-photo" aria-label="放大账号头像" aria-haspopup="dialog"><span id="account-fallback"><svg viewBox="0 0 30 30" aria-hidden="true"><circle cx="15" cy="10" r="5"/><path d="M5 28v-4a10 10 0 0 1 20 0v4"/></svg><img id="account-default-avatar" src="/assets/noface.jpg" alt="默认头像" referrerpolicy="no-referrer"></span><img id="account-avatar" alt="用户头像" referrerpolicy="no-referrer" hidden></button><button id="account-toggle" aria-haspopup="dialog" aria-controls="account-menu" aria-expanded="false"><span id="account-name">未登录</span><svg class="chevron" viewBox="0 0 10 6" aria-hidden="true"><path d="M0 0h10L5 6Z"/></svg></button><div id="account-menu" role="dialog" aria-label="账号信息" tabindex="-1" hidden><strong id="account-menu-name" hidden></strong><span id="account-uid">请在桌面应用右上角登录</span></div></div></header>
 <main id="comment-workspace" data-workspace="comments" hidden>
   <aside>
     <div class="aside-top">
       <div class="search">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
         <input id="q" placeholder="搜索稿件标题 / BV 号 / 评论内容" autocomplete="off">
-        <kbd>/</kbd>
+        <button type="button" class="clr" id="qClear" aria-label="清空稿件搜索" title="清空稿件搜索" hidden>×</button>
       </div>
       <div class="chips" id="filters">
         <button class="chip" data-f="all" aria-pressed="true">全部稿件</button>
@@ -67,4 +67,17 @@
 <div id="m-chat-view" hidden><div id="m-chat-title" class="chat-title"></div><div id="m-chat-scroll" data-archive-scroll-root tabindex="0" role="log" aria-label="归档会话" aria-live="off"><div class="chat-history"><div id="m-chat-sentinel" class="load-sentinel" aria-hidden="true"></div><span id="m-chat-progress" class="muted"></span><button id="m-chat-more">加载更早消息</button><div id="m-chat-error" role="alert"></div></div><div id="m-chat-messages"></div></div></div>
 </div></div></div><div id="m-like-detail" hidden></div></section></main>
 <button id="back-to-top" class="back-to-top" aria-label="回到顶部" title="回到顶部" hidden><svg viewBox="0 0 12 8" aria-hidden="true"><path d="M0 8L6 0l6 8Z"/></svg></button>
-<script src="/assets/archive-loading.js" defer></script><script src="/assets/archive-images.js" defer></script><script src="/assets/comments.js" defer></script><script src="/assets/messages.js" defer></script><script src="/assets/account.js" defer></script><script src="/assets/workspaces.js" defer></script></body></html>
+<dialog id="image-lightbox" aria-labelledby="image-lightbox-title">
+  <div class="lightbox-panel">
+    <h2 id="image-lightbox-title" class="lightbox-title">图片预览</h2>
+    <div class="lightbox-toolbar">
+      <a data-image-original target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" hidden>访问原图</a>
+      <button type="button" data-lightbox-close aria-label="关闭图片预览" autofocus>×</button>
+    </div>
+    <div class="lightbox-stage">
+      <div class="lightbox-viewport"></div>
+      <span class="lightbox-status" role="status" hidden></span>
+    </div>
+  </div>
+</dialog>
+<script src="/assets/image-lightbox.js" defer></script><script src="/assets/archive-loading.js" defer></script><script src="/assets/archive-images.js" defer></script><script src="/assets/comments.js" defer></script><script src="/assets/messages.js" defer></script><script src="/assets/account.js" defer></script><script src="/assets/workspaces.js" defer></script></body></html>

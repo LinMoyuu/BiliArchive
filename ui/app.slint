@@ -1535,7 +1535,7 @@ export component AppWindow inherits Window {
                             spacing: 8px;
                             Text { min-width: 0px; overflow: elide; text: "消息与附件自动归档"; color: Theme.muted; font-size: Theme.font-body; horizontal-stretch: 1; vertical-alignment: center; }
 
-                            Btn { text: "重试NG项（" + root.message-ng-count + "）"; width: 110px; enabled: !root.busy && root.account-logged-in && root.message-ng-count > 0; clicked => {root.message-retry-ng();} }
+                            Btn { text: "重试NG项[" + root.message-ng-count + "]"; width: 110px; enabled: !root.busy && root.account-logged-in && root.message-ng-count > 0; clicked => {root.message-retry-ng();} }
                             Btn { text: "处理附件"; width: 78px; enabled: !root.busy && root.message-attachments-pending > 0; clicked => {root.message-attachments();} }
                             Btn { text: "导出 JSON"; width: 92px; primary: true; enabled: !root.busy; clicked => {root.message-export();} }
                         }
@@ -1721,7 +1721,7 @@ export component AppWindow inherits Window {
                                                 horizontal-stretch: 1;
                                                 alignment: LayoutAlignment.center;
                                                 spacing: 2px;
-                                                Text { text: root.web-running ? "服务运行中" : "服务未运行"; color: Theme.faint; font-size: Theme.font-hint; }
+                                                Text { text: root.web-running ? "服务运行中" : "服务未运行"; color: Theme.faint; font-size: Theme.font-hint; horizontal-alignment: left; }
                                                 if root.web-running && root.web-address != "" : Rectangle {
                                                     height: 15px;
                                                     forward-focus: web-address-focus;
@@ -1730,6 +1730,8 @@ export component AppWindow inherits Window {
                                                     border-radius: 3px;
                                                     background: web-address-focus.has-focus ? #EDF4FA : transparent;
                                                     Text {
+                                                        x: 0px; y: 0px; width: parent.width; height: parent.height;
+                                                        horizontal-alignment: left;
                                                         text: root.web-address;
                                                         color: web-address-hit.has-hover ? #4D7697 : #577B9C;
                                                         font-size: Theme.font-hint;

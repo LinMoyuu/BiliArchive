@@ -14,6 +14,7 @@
    else if(parsed.protocol==='https:')safe=parsed.href;
   }catch{}
   const remote=window.archiveImages?.publicURL(original)||'';
+  if(remote)avatar.setAttribute('data-lightbox-original',remote);else avatar.removeAttribute('data-lightbox-original');
   const key=JSON.stringify([safe,remote,scope]);
   if(key===avatarUrl)return;
   window.archiveImages?.reset(avatar);

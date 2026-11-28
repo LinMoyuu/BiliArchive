@@ -213,6 +213,11 @@
   clearIndicator(img);
   const fallback=document.createElement('span');
   fallback.className='archive-image-placeholder';
+  const frame=img.closest?.('.archive-image-slot');
+  if(frame){
+   frame.setAttribute('data-lightbox-source',img.getAttribute('data-archive-src')||'');
+   frame.setAttribute('data-lightbox-original',img.getAttribute('data-archive-original')||'');
+  }
   if(img.hasAttribute('data-archive-placeholder'))fallback.setAttribute?.('data-image-slot','');
   fallback.textContent='图片未能加载';
   img.replaceWith(fallback);

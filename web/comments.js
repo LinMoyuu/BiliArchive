@@ -625,27 +625,41 @@ function renderSort(){
 
 function syncSearchBoxes(){
   $('q').value = state.vq;
+  $('qClear').hidden = !$('q').value;
   $('cq').value = state.q;
   $('csearch').classList.toggle('filled', !!state.q);
 }
 
 // ---------------- 交互 ----------------
 let timer = null;
-$('q').oninput = e => {
-  clearTimeout(timer);
-  timer = setTimeout(async ()=>{
-    const query = e.target.value.trim();
-    $('boot').textContent = '';
-    try {
-      await searchArchive(query);
-      if (query === $('q').value.trim() && state.doc) {
-        state.vq = query;
-        renderList();
-      }
-    } catch (error) {
-      if (error.name !== 'AbortError' && query === $('q').value.trim()) $('boot').textContent = error.message;
+let postSearchGeneration = 0;
+async function applyPostSearch(query, generation) {
+  $('boot').textContent = '';
+  try {
+    await searchArchive(query);
+    if (generation === postSearchGeneration && query === $('q').value.trim() && state.doc) {
+      state.vq = query;
+      renderList();
     }
-  }, 160);
+  } catch (error) {
+    if (generation === postSearchGeneration && error.name !== 'AbortError') $('boot').textContent = error.message;
+  }
+}
+function updatePostSearch() {
+  clearTimeout(timer);
+  searchRequest?.abort();
+  const value = $('q').value;
+  const query = value.trim();
+  $('qClear').hidden = !value;
+  const generation = ++postSearchGeneration;
+  if (!query) return applyPostSearch(query, generation);
+  timer = setTimeout(() => applyPostSearch(query, generation), 160);
+}
+$('q').oninput = updatePostSearch;
+$('qClear').onclick = () => {
+  $('q').value = '';
+  $('q').focus();
+  return updatePostSearch();
 };
 
 let ctimer = null;

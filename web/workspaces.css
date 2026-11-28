@@ -50,7 +50,6 @@
     border:0; outline:0; background:transparent; flex:1; min-width:0; margin-left:7px; font:inherit; font-size:12.5px; color:var(--text);
   }
 :is(#comment-workspace,#comment-header) .search input::placeholder{color:#a8aebe}
-:is(#comment-workspace,#comment-header) .search kbd{font:11px ui-monospace,monospace; color:var(--faint); border:1px solid var(--line); border-radius:4px; padding:0 4px; background:#fff}
 :is(#comment-workspace,#comment-header) .chips{display:flex; gap:6px; flex-wrap:wrap}
 :is(#comment-workspace,#comment-header) .chip{
     height:26px; padding:0 10px; border-radius:999px; border:1px solid var(--line);
@@ -145,9 +144,6 @@
     padding:0 5px; line-height:16px; white-space:nowrap;
   }
 :is(#comment-workspace,#comment-header) .pics{display:flex; flex-wrap:wrap; gap:6px; margin-top:7px}
-:is(#comment-workspace,#comment-header) .pics a{display:block; width:104px; height:104px; border-radius:8px; overflow:hidden; border:1px solid var(--line); background:#f4f6fb}
-:is(#comment-workspace,#comment-header) .pics img{width:100%; height:100%; object-fit:cover; display:block}
-:is(#comment-workspace,#comment-header) .reply .pics a{width:66px; height:66px}
 :is(#comment-workspace,#comment-header) .lv{font-size:10px; color:var(--faint); border:1px solid var(--line); border-radius:4px; padding:0 3px}
 :is(#comment-workspace,#comment-header) .t{font-size:11px; color:var(--faint)}
 :is(#comment-workspace,#comment-header) .pin,:is(#comment-workspace,#comment-header) .upflag{font-size:10px; padding:0 5px; border-radius:4px; font-weight:600}
@@ -196,7 +192,6 @@
 :is(#message-workspace,#message-header) .body{white-space:pre-wrap;line-height:1.65}
 :is(#message-workspace,#message-header) .meta{color:#757c8f;font-size:12px;margin-bottom:8px}
 :is(#message-workspace,#message-header) .attachments{display:flex;gap:12px;flex-wrap:wrap;margin-top:12px}
-:is(#message-workspace,#message-header) .attachments img{max-width:220px;max-height:200px;border-radius:8px}
 :is(#message-workspace,#message-header) audio{max-width:100%}
 :is(#message-workspace,#message-header) pre{white-space:pre-wrap;max-height:350px;overflow:auto;background:#f6f7fb;padding:12px}
 :is(#message-workspace,#message-header) .pager{display:flex;align-items:center;justify-content:space-between;margin-top:16px}
@@ -213,7 +208,7 @@
 
 /* Product and account popovers are anchored to their actual trigger row. */
 .product-picker>button{height:24px}#workspace-menu{top:28px;margin-top:0}
-.web-account{position:relative;flex:none;margin-left:0}.web-account>button{display:flex;align-items:center;gap:6px;padding:0;border:0;background:transparent;color:inherit;font:inherit;cursor:pointer}.web-account>button:focus-visible{outline:2px solid #00a1d6;outline-offset:3px;border-radius:4px}.account-photo{display:block;position:relative;width:30px;height:30px;border-radius:50%;overflow:hidden;background:#fff0f5;flex:none}.account-photo img,.account-photo svg{display:block;width:100%;height:100%;object-fit:cover}.account-photo svg{fill:#fb7299}.chevron{width:10px;height:6px;fill:none;stroke:#757c8f;stroke-width:1.5px}#account-name{max-width:120px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}#account-menu{position:absolute;right:0;top:calc(100% + 6px);min-width:180px;max-width:calc(100vw - 24px);padding:12px;background:white;border:1px solid #e5e8f0;border-radius:10px;box-shadow:0 8px 24px #17203322;z-index:1000;font-size:12px;overflow-wrap:anywhere}#m-types{display:grid;gap:6px}#m-types button{text-align:left}.session-heading{font-size:12px;color:#757c8f;padding:8px 3px 2px}#m-sessions{border-top:1px solid #e5e8f0;padding-top:12px}
+.web-account{position:relative;display:flex;align-items:center;gap:6px;flex:none;margin-left:0}.web-account>button{display:flex;align-items:center;gap:6px;padding:0;border:0;background:transparent;color:inherit;font:inherit;cursor:pointer}.web-account>button:focus-visible{outline:2px solid #00a1d6;outline-offset:3px}.web-account>.account-photo{display:block;cursor:zoom-in;position:relative;width:30px;height:30px;border-radius:50%;overflow:hidden;background:#fff0f5;flex:none}.account-photo img,.account-photo svg{display:block;width:100%;height:100%;object-fit:cover}.account-photo svg{fill:#fb7299}.chevron{width:10px;height:6px;fill:none;stroke:#757c8f;stroke-width:1.5px}#account-name{max-width:120px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}#account-menu{position:absolute;right:0;top:calc(100% + 6px);min-width:180px;max-width:calc(100vw - 24px);padding:12px;background:white;border:1px solid #e5e8f0;border-radius:10px;box-shadow:0 8px 24px #17203322;z-index:1000;font-size:12px;overflow-wrap:anywhere}#m-types{display:grid;gap:6px}#m-types button{text-align:left}.session-heading{font-size:12px;color:#757c8f;padding:8px 3px 2px}#m-sessions{border-top:1px solid #e5e8f0;padding-top:12px}
 @media(max-width:600px){.product-picker>span{display:none}#account-name{max-width:72px}.app-header{gap:8px}.app-logo{display:none}#m-types{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
 #account-fallback{display:block;position:absolute;inset:0}#account-default-avatar{position:absolute;inset:0}
@@ -265,7 +260,7 @@
 :is(#comment-workspace,#message-workspace) .search svg{flex:none;color:var(--faint)}
 :is(#comment-workspace,#message-workspace) .search input:not([type=checkbox]):not([type=radio]){height:100%;border:0;outline:0;box-shadow:none;background:transparent;flex:1;width:100%;padding:0;margin:0}
 :is(#comment-workspace,#message-workspace) input::placeholder{color:#a8aebe}
-#message-workspace .message-toolbar-right>.search{flex:1;max-width:340px}
+#message-workspace .message-toolbar-right>.search{flex:1;max-width:340px;height:var(--control-height)}
 #message-workspace [data-like-query]{height:var(--search-height);background:#f4f6fb}
 #message-workspace [data-like-query]:focus{background:white;border-color:#f7c3d3}
 #message-workspace #m-sessions button{height:auto;min-height:32px;padding:6px 10px}
@@ -291,7 +286,7 @@
 :is(#comment-workspace,#message-workspace) .seg button{height:26px;min-height:26px;border:0;border-radius:6px;background:transparent;padding:0 10px;font-size:11.5px}
 :is(#comment-workspace,#message-workspace) .seg button[aria-pressed=true]{background:white;color:var(--pink-dark);box-shadow:0 1px 2px #10284012}
 #comment-workspace :is(.cmt-foot button,.more-replies){height:auto;min-height:20px;border:0;background:transparent;padding:0;font-size:11.5px;text-align:left}
-#comment-workspace .search .clr{height:22px;min-height:22px;width:22px;border:0;background:transparent;border-radius:5px;padding:0;font-size:16px}
+#comment-workspace .search .clr{flex:none;height:22px;min-height:22px;width:22px;border:0;background:transparent;border-radius:5px;padding:0;font-size:16px}
 :is(#comment-workspace,#message-workspace) input[type=checkbox]{accent-color:var(--pink)}
 :is(#workspace-toggle,#account-toggle):focus-visible{outline:2px solid #f7c3d3;outline-offset:3px}
 @supports selector(::-webkit-scrollbar){*{scrollbar-width:auto;scrollbar-color:auto}}
@@ -406,7 +401,6 @@
 #message-workspace .chat-own .chat-bubble{background:var(--pink);color:white;border-radius:16px 0 16px 16px}
 #message-workspace .chat-text{white-space:pre-wrap;font-size:13px;line-height:1.65;overflow-wrap:anywhere}
 #message-workspace .chat-bubble .attachments{margin-top:5px;max-width:100%}
-#message-workspace .chat-bubble .attachments img{width:200px;height:160px;max-width:100%;object-fit:contain}
 #message-workspace .chat-bubble audio{width:240px;max-width:100%}
 #message-workspace .chat-content .reply-footer{gap:7px;margin-top:4px;text-align:left}
 #message-workspace .chat-own .reply-footer{justify-content:flex-end}
@@ -473,7 +467,6 @@ body:has(#account-toggle[data-mode="offline"])>main{height:auto;min-height:0;fle
 }
 
 /* Keep image slots visible and stable while their requests wait. */
-.attachments img[data-archive-src]{display:block;width:200px;height:160px;max-width:100%;object-fit:contain;background:#f1f3f7}
 img[data-archive-src]:not([src]){color:transparent}
 
 
@@ -510,7 +503,19 @@ img[data-archive-src]:not([src]),img[data-image-state="loading"]{background-colo
 .archive-avatar-slot{border-radius:50%}
 .chat-avatar .archive-avatar-slot{width:32px;height:32px}
 #message-workspace .archive-group-avatar-slot{width:32px;height:32px;flex:none}
-.attachments .archive-image-slot{width:200px;height:160px;max-width:100%;border-radius:8px}
+:is(.pics,.attachments)>*{min-width:0;max-width:100%}
+:is(.pics,.attachments) a:has(.archive-image-slot){display:inline-block;max-width:100%;vertical-align:top}
+:is(.pics,.attachments) .archive-image-slot{width:200px;height:160px;max-width:100%;border-radius:8px}
+:is(.pics,.attachments) .archive-image-slot:has(>img[data-image-state="loaded"]){
+ display:inline-block;width:auto;height:auto;contain:none;background:transparent;vertical-align:top
+}
+:is(.pics,.attachments) .archive-image-slot>img{
+ object-fit:contain;max-width:100%;max-height:160px
+}
+:is(.pics,.attachments) .archive-image-slot>img[data-image-state="loaded"]{
+ width:auto;height:auto;max-width:min(200px,100%)
+}
+:is(.archive-image-slot,.account-photo){cursor:zoom-in}
 :is(.archive-image-slot,.account-photo)[data-image-loading]::after{
  content:"";position:absolute;pointer-events:none;box-sizing:border-box;
  inset:0;margin:auto;width:20px;height:20px;border:2px solid #c7d0df;border-top-color:#526681;
@@ -551,3 +556,49 @@ img[data-image-state="loaded"],.account-photo[data-image-state="loaded"] #accoun
 #m-page-error{color:#bd3f55;font-size:12px;overflow-wrap:anywhere}
 #m-page-error:empty,#message-workspace.chat-active #m-page-error{display:none}
 #message-workspace #m-session-pane{scrollbar-gutter:stable}
+
+#image-lightbox{
+ position:fixed;inset:0;width:100%;height:100%;max-width:none;max-height:none;margin:0;
+ padding:0;border:0;background:transparent;color:#f3f5f9
+}
+#image-lightbox::backdrop{background:#10131bef;animation:lightbox-fade-in 180ms ease-out both}
+#image-lightbox[data-closing],#image-lightbox[data-closing]::backdrop{animation:lightbox-fade-out 180ms ease-in both}
+.lightbox-panel{position:relative;height:100%}
+.lightbox-title{
+ position:absolute;width:1px;height:1px;padding:0;margin:-1px;border:0;
+ overflow:hidden;clip-path:inset(50%);white-space:nowrap
+}
+.lightbox-toolbar{
+ position:absolute;inset-block-start:8px;inset-inline-end:12px;z-index:1;display:flex;align-items:center;gap:8px
+}
+.lightbox-toolbar :is(button,a){
+ display:inline-flex;align-items:center;justify-content:center;min-width:36px;min-height:36px;padding:0 10px;
+ border:0;border-radius:6px;background:#ffffff17;color:inherit;font:inherit;font-size:13px;text-decoration:none;cursor:pointer
+}
+.lightbox-toolbar [data-lightbox-close]{font-size:24px;padding:0}
+.lightbox-toolbar :is(button,a):hover{background:#ffffff2b}
+.lightbox-toolbar :is(button,a):focus-visible{outline:2px solid #f7a5c0;outline-offset:2px}
+.lightbox-stage{position:absolute;inset:0}
+.lightbox-viewport{
+ position:absolute;inset:0;display:flex;overflow:auto;overscroll-behavior:contain;scrollbar-width:none
+}
+.lightbox-viewport>img{
+ display:block;flex:none;margin:auto;user-select:none;cursor:zoom-in;
+ animation:lightbox-expand 180ms ease-out both
+}
+.lightbox-viewport.zoomed>img{cursor:zoom-out}
+.lightbox-viewport.dragging,.lightbox-viewport.dragging>img{cursor:grabbing}
+#image-lightbox[data-closing] .lightbox-viewport>img{animation:lightbox-shrink 180ms ease-in both}
+.lightbox-status{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);pointer-events:none;text-align:center}
+.lightbox-status[data-lightbox-loading]::before{
+ content:"";display:block;width:22px;height:22px;margin:0 auto 8px;border:2px solid #637087;
+ border-top-color:#f3f5f9;border-radius:50%;animation:archive-loader-spin .85s linear infinite
+}
+@keyframes lightbox-fade-in{from{opacity:0}to{opacity:1}}
+@keyframes lightbox-fade-out{from{opacity:1}to{opacity:0}}
+@keyframes lightbox-expand{from{opacity:0;transform:scale(.94)}to{opacity:1;transform:scale(1)}}
+@keyframes lightbox-shrink{from{transform:scale(1)}to{transform:scale(.94)}}
+@media(prefers-reduced-motion:reduce){
+ #image-lightbox,#image-lightbox::backdrop,#image-lightbox .lightbox-viewport>img,
+ #image-lightbox .lightbox-status::before{animation:none!important}
+}

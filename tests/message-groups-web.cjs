@@ -6,13 +6,15 @@ const n={value:'',hidden:false,querySelectorAll(selector){return id==='items'&&s
 function parse(value){for(const m of value.matchAll(/class="message-group" data-group-key="([^"]+)"/g)){details.push({dataset:{groupKey:m[1]},open:false,isConnected:true,body:node('body-'+Math.random()),querySelector(){return this.body}})}}
 Object.defineProperty(n,'innerHTML',{get(){return html},set(value){html=String(value);plain='';controls.clear();if(id==='items'){details.forEach(d=>d.isConnected=false);details=[];parse(html);}}});Object.defineProperty(n,'textContent',{get(){return plain},set(value){plain=String(value);html='';controls.clear();}});nodes.set(id,n);return n;}
 const button=(field,value)=>({dataset:{[field]:value},attributes:{},setAttribute(k,v){this.attributes[k]=v}});
-const types=['replies','mentions','likes','private'].map(t=>button('type',t)),modes=['flat','user','video'].map(g=>button('group',g));
+const types=['replies','mentions','likes','private','my_comments'].map(t=>button('type',t)),modes=['flat','user','video'].map(g=>button('group',g));
 const item=(id='0')=>({id:String(id),type:'replies',sender_uid:'18446744073709551614',sender_name:'<unsafe>',text:'hello <img onerror=x>',timestamp:1,raw:{},attachments:[]});
 function groupPayload(){return{account_uid:uid,total:51,total_items:180,groups:[{key:'user:18446744073709551614',label:'<unsafe>',identifier:'UID 18446744073709551614',count:120,first_time:1,last_time:3},{key:'user:2',label:'second',identifier:'UID 2',count:2,first_time:2,last_time:2},{key:'single',standalone:true,item:item('standalone')} ]}}
 const observers=[];class Observer{constructor(cb){this.cb=cb;this.targets=new Set();observers.push(this)}observe(n){this.targets.add(n)}unobserve(n){this.targets.delete(n)}disconnect(){this.targets.clear()}fire(n){if(this.targets.has(n))this.cb([{target:n,isIntersecting:true}])}}
 const ctx=vm.createContext({IntersectionObserver:Observer,console,URL,URLSearchParams,setTimeout,clearTimeout,location:{href:'http://localhost/messages'},document:{getElementById:node,querySelectorAll(selector){return selector==='#types button'?types:selector==='#grouping button'?modes:[]}},fetch:async value=>{
 requests.push(value);const url=new URL(value,'http://localhost'),params=url.searchParams;
 if(url.pathname.endsWith('/summary'))return{ok:true,json:async()=>({account_uid:uid,counts:{private:10,groups:2,replies:uid==='12'?120:0,mentions:60,likes:9},attachments_saved:2,attachments_pending:1,sessions:[]})};
+if(params.get('type')==='my_comments'&&url.pathname.endsWith('/groups'))return{ok:true,json:async()=>({account_uid:uid,total:1,total_items:1,groups:[{key:'dynamic:42',subject:{key:'dynamic:42',type:'dynamic',id:'42',text:'topic',cover_checked:true},count:1}]})};
+if(params.get('type')==='my_comments'&&params.has('group_key'))return{ok:true,json:async()=>({account_uid:uid,total:1,items:[{id:'123',type:'my_comments',text:'my comment',sources:['likes'],reply_count:1}]})};
 if(url.pathname.endsWith('/groups'))return{ok:true,json:async()=>params.get('offset')==='3'?{account_uid:uid,total:51,total_items:180,groups:[{key:'last',label:'last group',identifier:'UID 3',count:1,first_time:1,last_time:1}]}:groupPayload()};
 if(params.has('group_key')){const offset=Number(params.get('offset')),total=params.get('group_key')==='user:2'?2:120;const payload={account_uid:uid,total,items:Array.from({length:Math.min(50,total-offset)},(_,i)=>item(String(offset+i)))};if(delayMember){delayMember=false;return new Promise(r=>release=()=>r({ok:true,json:async()=>payload}));}if(failMore&&offset===50){failMore=false;return{ok:false,status:500};}return{ok:true,json:async()=>payload};}
 return{ok:true,json:async()=>({account_uid:uid,total:1,items:[item()]})};
@@ -44,6 +46,18 @@ await types[0].onclick();assert.equal(node('order').value,'count_asc');assert.eq
 // Late member results cannot overwrite a freshly ranked list.
 d=details[0];delayMember=true;d.open=true;const rankingPending=d.ontoggle();await flush();node('order').value='count_desc';await node('order').onchange();const rankedFresh=details[0];release();await rankingPending;assert.equal(rankedFresh.body.innerHTML,'');
 await types.find(b=>b.dataset.type==='likes').onclick();assert.equal(node('grouping').hidden,true);assert(requests.at(-1).startsWith('/api/messages/items?'));assert(!new URL(requests.at(-1),'http://local').searchParams.has('group_by'));
+await types.find(b=>b.dataset.type==='my_comments').onclick();
+assert.equal(modes[1].hidden,true);assert.equal(modes[0].attributes['aria-pressed'],'true');
+await vm.runInContext("state.q='topic'; $('order').value='likes_desc'; $('order').onchange()",ctx);
+await modes[2].onclick();
+url=new URL(requests.at(-1),'http://local');
+assert.equal(url.pathname,'/api/messages/groups');assert.equal(url.searchParams.get('q'),'topic');assert.equal(url.searchParams.get('order'),'likes_desc');
+d=details[0];d.open=true;await d.ontoggle();
+url=new URL(requests.at(-1),'http://local');
+assert.equal(url.searchParams.get('group_key'),'dynamic:42');assert.equal(url.searchParams.get('order'),'likes_desc');
+assert.match(d.body.querySelector('[data-group-items]').innerHTML,/data-my-comment="123"/);
+await modes[0].onclick();
+assert.equal(new URL(requests.at(-1),'http://local').searchParams.has('group_by'),false);
 uid='99';await vm.runInContext("clearAccount('99')",ctx);assert(node('header-stats').innerHTML.includes('<b>0</b>条回复'));assert.equal(vm.runInContext('groupCache.size',ctx),0);assert.equal(vm.runInContext('groupingModes.replies',ctx),'flat');assert.equal(vm.runInContext('groupSorts.replies',ctx),'time');
 console.log('PASS: global header statistics, full-result grouping, lazy independent members, retries, two-level append pagination, escaped content, count ranking, independent ranking preferences, member chronology, stale response isolation and account reset');
 })().catch(e=>{console.error(e);process.exitCode=1});

@@ -325,14 +325,14 @@ fn handle(
                 return;
             }
         }
-        let own_list = path == "/api/messages/items"
+        let own_list = matches!(path.as_str(), "/api/messages/items" | "/api/messages/groups")
             && param("type").as_deref() == Some(crate::my_comments::VIEW);
         let own_likes = if own_list {
             view.as_ref().map(|view| view.messages("likes", ""))
         } else { None };
         let messages = if let Some(view) = &view {
             let ty = match path.as_str() {
-                "/api/messages/items" if own_list => "replies".to_owned(),
+                _ if own_list => "replies".to_owned(),
                 "/api/messages/likes" => "likes".to_owned(),
                 "/api/messages/profile" | "/api/messages/subjects" => String::new(),
                 "/api/messages/items" | "/api/messages/groups" => param("type").unwrap_or_else(|| "all".into()),
@@ -449,6 +449,44 @@ fn handle(
             );
             return;
         }
+        if own_list {
+            let Some(order) = crate::my_comments::Order::parse(param("order").as_deref().unwrap_or("new")) else {
+                respond_private(&mut stream,"400 Bad Request","text/plain",b"invalid comment order",method=="HEAD");
+                return;
+            };
+            let is_group_list = path == "/api/messages/groups";
+            let mode = param("group_by");
+            let key = param("group_key");
+            let valid = match (is_group_list, mode.as_deref(), key.as_deref()) {
+                (true, Some("video"), None) | (false, None, None) => true,
+                (false, Some("video"), Some(key)) => !key.is_empty(),
+                _ => false,
+            };
+            if !valid || param("my_comment_rpid").is_some()
+                || param("sort").is_some_and(|sort| !is_group_list || sort != "time")
+            {
+                respond_private(&mut stream,"400 Bad Request","text/plain",b"invalid grouping",method=="HEAD");
+                return;
+            }
+            let offset = param("offset").and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
+            let limit = param("limit").and_then(|s| s.parse::<usize>().ok()).unwrap_or(50).clamp(1, 200);
+            let query = param("q").unwrap_or_default();
+            let likes = own_likes.as_ref().map(|store| store.lock().unwrap());
+            let items = state.doc.items.iter().chain(likes.iter().flat_map(|store| store.doc.items.iter()));
+            let account_uid = &state.doc.account_uid;
+            let body = if is_group_list {
+                let (total, total_items, groups) = crate::my_comments::subject_page(items, &query, order, offset, limit, my_comment_detail);
+                json!({"account_uid":account_uid,"total":total,"total_items":total_items,"groups":groups})
+            } else {
+                let (total, rows) = match key.as_deref() {
+                    Some(key) => crate::my_comments::member_page(items, &query, order, Some(key), offset, limit, my_comment_detail),
+                    None => crate::my_comments::page(items, &query, order, offset, limit, my_comment_detail),
+                };
+                json!({"account_uid":account_uid,"total":total,"items":rows})
+            }.to_string();
+            respond_private(&mut stream,"200 OK","application/json; charset=utf-8",body.as_bytes(),method=="HEAD");
+            return;
+        }
         if path == "/api/messages/groups" {
             let ty=param("type").unwrap_or_default();let mode=param("group_by").unwrap_or_default();
             let query=param("q").unwrap_or_default();let ascending=param("order").is_some_and(|v|v=="old");
@@ -475,7 +513,7 @@ fn handle(
             let ty = param("type").unwrap_or_else(|| "all".into());
             let session = param("session").unwrap_or_default();
             let q = param("q").unwrap_or_default();
-            if !own_list && ty != "all" && !messages::VIEW_TYPES.contains(&ty.as_str()) {
+            if ty != "all" && !messages::VIEW_TYPES.contains(&ty.as_str()) {
                 respond_private(
                     &mut stream,
                     "400 Bad Request",
@@ -492,18 +530,6 @@ fn handle(
                 .and_then(|s| s.parse::<usize>().ok())
                 .unwrap_or(50)
                 .clamp(1, 200);
-            if own_list {
-                let Some(order) = crate::my_comments::Order::parse(param("order").as_deref().unwrap_or("new")) else {
-                    respond_private(&mut stream,"400 Bad Request","text/plain",b"invalid comment order",method=="HEAD");
-                    return;
-                };
-                let likes = own_likes.as_ref().map(|store| store.lock().unwrap());
-                let items = state.doc.items.iter().chain(likes.iter().flat_map(|store| store.doc.items.iter()));
-                let (total, rows) = crate::my_comments::page(items, &q, order, offset, limit, my_comment_detail);
-                let body = json!({"account_uid":state.doc.account_uid,"total":total,"items":rows}).to_string();
-                respond_private(&mut stream,"200 OK","application/json; charset=utf-8",body.as_bytes(),method=="HEAD");
-                return;
-            }
             let my_comment = param("my_comment_rpid");
             if my_comment.as_ref().is_some_and(|id| ty != "replies" || !crate::my_comments::valid_id(id)
                 || param("group_by").is_some() || param("group_key").is_some()) {
@@ -641,6 +667,7 @@ fn handle(
             &mut stream, "200 OK", "text/javascript; charset=utf-8",
             include_bytes!("../web/archive-loading.js"), method == "HEAD",
         ),
+        "/assets/image-lightbox.js" => respond(&mut stream, "200 OK", "text/javascript; charset=utf-8", include_bytes!("../web/image-lightbox.js")),
         "/assets/archive-images.js" => respond(&mut stream, "200 OK", "text/javascript; charset=utf-8", include_bytes!("../web/archive-images.js")),
         "/assets/account.js" => respond(&mut stream, "200 OK", "text/javascript; charset=utf-8", include_bytes!("../web/account.js")),
         "/assets/workspaces.js" => respond_private(
