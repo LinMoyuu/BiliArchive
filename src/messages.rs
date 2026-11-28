@@ -2132,9 +2132,8 @@ mod tests {
         save(&store).unwrap();
         let loaded = load(dir.path(), 12).unwrap();
         assert_eq!(loaded.doc.query("all", "", "alice", false).len(), 1);
-        let bundle = dir.path().join("bundle.json");
-        export_bundle(&store, &bundle).unwrap();
-        let exported = crate::archive::Envelope::parse(&std::fs::read(bundle).unwrap()).unwrap();
+        let archived = std::fs::read(store.root.join("replies.json")).unwrap();
+        let exported = crate::archive::Envelope::parse(&archived).unwrap();
         assert_eq!(crate::archive::messages(&exported).unwrap().items.len(), 1);
         assert_eq!(store.doc.items.len(), 1);
         let options = Options::parse(vec!["replies".into()], "2026-01-01", "2026-01-01").unwrap();
