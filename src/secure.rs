@@ -1,5 +1,5 @@
 //! Platform credential protection. Never falls back to plaintext.
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 /// DPAPI 里的 DATA_BLOB 结构
 #[cfg(windows)]
 #[repr(C)]
@@ -331,7 +331,8 @@ pub fn write_config(path: &std::path::Path, v: &serde_json::Value) -> Result<()>
         .and_then(|_| file.as_file().sync_all())
         .map_err(|_| anyhow!("配置写入失败，原文件已保留"))?;
     file.persist(path)
-        .map_err(|_| anyhow!("配置替换失败，原文件已保留"))?;
+        .map_err(|error| error.error)
+        .context("配置替换失败，原文件已保留")?;
     Ok(())
 }
 

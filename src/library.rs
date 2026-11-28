@@ -20,6 +20,7 @@ pub struct Active {
     pub offline: bool,
 }
 static ACTIVE: Mutex<Option<Active>> = Mutex::new(None);
+static COMMENT_TASK_MIGRATION: Mutex<()> = Mutex::new(());
 pub fn valid_id(id: &str) -> bool {
     id.len() == 32
         && id
@@ -207,8 +208,14 @@ pub fn migrate_comment_tasks(new_root: &Path) -> Result<()> {
         return Ok(());
     }
     let data = crate::checkpoint::data_dir()?;
-    let marker = data.join("migrations/checkpoint-library.json");
     let id = current_id()?;
+    migrate_comment_tasks_at(&data, new_root, &id)
+}
+
+fn migrate_comment_tasks_at(data: &Path, new_root: &Path, id: &str) -> Result<()> {
+    // Archive readers can reach this in parallel. Hold the lock through backup and marker creation.
+    let _migration = COMMENT_TASK_MIGRATION.lock().unwrap();
+    let marker = data.join("migrations/checkpoint-library.json");
     if marker.exists() {
         return Ok(());
     }
@@ -285,6 +292,25 @@ mod tests {
         assert!(value.get("archive_root").is_none());
         assert!(t.path().join("migrations/legacy-state").is_dir());
     }
+    #[test]
+    fn concurrent_comment_task_migrations_share_the_completion_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path();
+        let root = data.join("checkpoints/library");
+        let start = std::sync::Barrier::new(8);
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                scope.spawn(|| {
+                    start.wait();
+                    migrate_comment_tasks_at(data, &root, "library").unwrap();
+                });
+            }
+        });
+        let marker = data.join("migrations/checkpoint-library.json");
+        let value: Value = serde_json::from_slice(&std::fs::read(marker).unwrap()).unwrap();
+        assert_eq!(value, json!({"library_id":"library"}));
+    }
+
     #[test]
     fn corrupt_manifest_is_retained() {
         let t = tempfile::tempdir().unwrap();
