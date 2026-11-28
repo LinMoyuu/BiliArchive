@@ -7,6 +7,7 @@ for(const binding of ['padding-left: Theme.workspace-padding-x','padding-right: 
 assert(surface.includes('@children'));assert(surface.includes('background: Theme.bg'));
 const panel=body('component HubPanel');for(const property of ['border-radius: Theme.panel-radius','border-width: 1px','drop-shadow-blur: Theme.panel-shadow-blur','drop-shadow-offset-y: Theme.panel-shadow-offset'])assert(panel.includes(property));
 assert(ui.includes('component HubLogPanel inherits HubPanel'));assert(ui.includes('component StatsPreview inherits HubPanel'));
+assert.match(ui,/component StatCard inherits Rectangle\s*\{[^}]*min-width: 0px;\s*preferred-width: 0px;\s*horizontal-stretch: 1;/);
 for(const name of ['comments','messages']){
  const workspace=body(name+'-workspace := WorkspaceSurface');
  assert(workspace.includes('width: parent.width; height: parent.height;'));assert(!workspace.includes('padding: 16px;'));

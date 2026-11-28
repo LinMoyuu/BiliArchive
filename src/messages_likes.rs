@@ -231,6 +231,7 @@ pub(super) fn collect(
                 let d = data(&response)?;
                 let rows = array(d, "items")?;
                 let page: Vec<_> = rows.iter().map(user).collect::<Result<_>>()?;
+                let saved_users = !page.is_empty();
                 let new_keys: BTreeSet<_> = page
                     .iter()
                     .map(|u| u.key.clone())
@@ -250,6 +251,7 @@ pub(super) fn collect(
                 let end_value = &d["page"]["is_end"];
                 if !end_value.is_boolean() && !end_value.is_u64() {
                     checkpoint_store(store, task, "likes")?;
+                    ctx.record_collection(store, task.uid, saved_users);
                     let reason = ctx.paging_failed(
                         "点赞明细缺少有效 page.is_end".into(),
                         json!({"reason":"invalid_paging"}),
@@ -325,6 +327,7 @@ pub(super) fn collect(
                         };
                     }
                     checkpoint_store(store, task, "likes")?;
+                    ctx.record_collection(store, task.uid, saved_users);
                     let reason = ctx.paging_failed(detail, diagnostic)?;
                     store
                         .lock()
@@ -363,6 +366,7 @@ pub(super) fn collect(
                 }
                 task.likes.insert(card_id.clone(), cursor.clone());
                 checkpoint_store(store, task, "likes")?;
+                ctx.record_collection(store, task.uid, saved_users);
                 ctx.recovered()?;
                 ctx.paging_accepted()?;
             }

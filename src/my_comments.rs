@@ -274,6 +274,9 @@ pub fn collect(
         write(root, &detail)
             .with_context(|| format!("保存评论 {rpid} 失败"))
             .context(crate::messages::PersistFailure)?;
+        if let Err(error) = crate::collection_time::record(&crate::archive::storage_root(root), uid) {
+            eprintln!("记录上次采集时间失败：{error:#}");
+        }
     }
     Ok(failures)
 }

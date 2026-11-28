@@ -11,23 +11,26 @@ vm.runInContext(fs.readFileSync(path.join(__dirname,'../web/archive-images.js'),
 vm.runInContext(source,ctx);const flush=()=>new Promise(r=>setImmediate(r));
 (async()=>{
  await flush();assert.equal(interval,15000);assert.equal(requests[0][0],'/api/account');assert.equal(requests[0][1].cache,'no-store');
- assert.equal(node('account-name').textContent,'<script>nickname</script>');assert.equal(node('account-uid').textContent,'UID 18446744073709551614');assert.equal(events.length,0);
+ assert.equal(node('account-name').textContent,'<script>nickname</script>');assert.equal(node('account-uid').textContent,'UID 18446744073709551614');assert.equal(events.length,0);assert.equal(node('account-last-collection').textContent,'上次采集：未记录');
  assert.equal(node('account-avatar').src,data.avatar_url);node('account-avatar').onload();assert.equal(node('account-avatar').hidden,false);assert.equal(node('account-fallback').hidden,true);
- node('account-toggle').onclick();assert.equal(node('account-menu').hidden,false);listeners['doc:click']({target:node('account-uid')});assert.equal(node('account-menu').hidden,false);
+ const requestsBeforeMenu=requests.length;node('account-toggle').onclick();assert.equal(requests.length,requestsBeforeMenu+1);assert.equal(node('account-menu').hidden,false);listeners['doc:click']({target:node('account-uid')});assert.equal(node('account-menu').hidden,false);
  node('account-menu').onkeydown({key:'Escape',preventDefault(){}});assert.equal(node('account-menu').hidden,true);assert.equal(document.activeElement,node('account-toggle'));
  node('account-toggle').onkeydown({key:'ArrowDown',preventDefault(){}});assert.equal(node('account-menu').hidden,false);listeners['doc:click']({target:node('outside')});assert.equal(node('account-menu').hidden,true);
  node('account-avatar').onerror();assert.equal(node('account-avatar').hidden,true);assert.equal(node('account-fallback').hidden,false);
  data={logged_in:true,uid:'2',name:'second',avatar_url:'javascript:alert(1)'};await window.refreshAccount();assert.equal(node('account-name').textContent,'second');assert.equal(node('account-avatar').src,undefined);assert.equal(events.at(-1).detail.uid,'2');assert.equal(node('account-menu').hidden,true);
  const count=events.length;await window.refreshAccount();assert.equal(events.length,count);
  failed=true;await window.refreshAccount();assert.equal(node('account-name').textContent,'second');failed=false;
- data={logged_in:false,uid:'',name:'',avatar_url:''};await window.refreshAccount();assert.equal(node('account-name').textContent,'未登录');assert.equal(events.at(-1).detail.uid,'');assert(node('account-uid').textContent.includes('桌面'));
+ data={...data,mode:'offline',last_collection_at:'2026-11-28T00:00:00Z'};await window.refreshAccount();
+ assert.equal(node('account-uid').textContent,'UID 2');assert.equal(node('account-name').textContent,'second · 本地');
+ assert.match(node('account-last-collection').textContent,/上次采集：2026/);
+ data={logged_in:false,uid:'',name:'',avatar_url:''};await window.refreshAccount();assert.equal(node('account-name').textContent,'未登录');assert.equal(events.at(-1).detail.uid,'');assert(node('account-uid').textContent.includes('桌面'));assert.equal(node('account-last-collection').hidden,true);
  document.hidden=true;const before=requests.length;timer();assert.equal(requests.length,before);document.hidden=false;listeners.focus();await flush();assert.equal(requests.length,before+1);
  deferred=true;const first=window.refreshAccount(),second=window.refreshAccount();pending[1](response({logged_in:true,uid:'3',name:'new',avatar_url:''}));await second;pending[0](response({logged_in:true,uid:'2',name:'stale',avatar_url:''}));await first;assert.equal(node('account-name').textContent,'new');assert.equal(events.at(-1).detail.uid,'3');
  const html=fs.readFileSync(path.join(__dirname,'../web/index.html'),'utf8');const sidebar=html.match(/<main id="message-workspace"[^>]*><aside>([\s\S]*?)<\/aside>/)[1];assert.deepEqual([...sidebar.matchAll(/data-type="([^"]+)"/g)].map(m=>m[1]),['replies','mentions','likes','private','my_comments']);assert(html.includes('id="account-avatar" alt="用户头像" referrerpolicy="no-referrer"'));assert(html.includes('/assets/account.js'));assert(!html.includes('▾'));assert.equal([...html.matchAll(/class="chevron" viewBox="0 0 10 6"/g)].length,1);assert(html.includes('id="account-default-avatar" src="/assets/noface.jpg"'));
  node('account-default-avatar').onerror();assert.equal(node('account-default-avatar').hidden,true);
 
  deferred=false;data={logged_in:false,mode:'offline',library_id:'a'.repeat(32),uid:'12',name:'离线资料'+('LongArchiveName'.repeat(20)),avatar_url:'/api/archive-resources/'+'b'.repeat(32),avatar_fallback_url:'https://i0.hdslb.com/backup.jpg'};
- await window.refreshAccount();assert.equal(window.archiveOffline,true);assert.equal(node('account-name').textContent,data.name+' · 本地');assert.equal(node('account-menu-name').textContent,data.name+' · 本地');assert.equal(node('account-avatar').src,'http://localhost/api/archive-resources/'+'b'.repeat(32));
+ await window.refreshAccount();assert.equal(window.archiveOffline,true);assert.equal(node('account-name').textContent,data.name+' · 本地');assert(!html.includes('id="account-menu-name"'));assert.equal(node('account-avatar').src,'http://localhost/api/archive-resources/'+'b'.repeat(32));
  assert.equal(events.at(-1).detail.uid,'12');const offlineEvents=events.length;
  data={...data,library_id:'c'.repeat(32)};await window.refreshAccount();assert.equal(events.length,offlineEvents+1,'same UID in another library must reset workspace state');
  node('account-avatar').onerror();

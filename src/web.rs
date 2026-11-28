@@ -256,8 +256,18 @@ fn handle(
             return;
         }
         if path == "/api/account" {
-            let body = view.as_ref().map_or_else(|| serde_json::to_vec(&*account.lock().unwrap()), |view| serde_json::to_vec(&view.scope.account)).unwrap();
-            respond_private(&mut stream, "200 OK", "application/json; charset=utf-8", &body, method == "HEAD");
+            let mut identity = view.as_ref().map_or_else(
+                || serde_json::to_value(&*account.lock().unwrap()),
+                |view| serde_json::to_value(&view.scope.account),
+            ).unwrap();
+            let saved_at = view.as_ref()
+                .and_then(|view| crate::collection_time::read(&crate::archive::root(&view.scope.root), view.scope.uid))
+                .and_then(chrono::DateTime::from_timestamp_millis)
+                .map(|time| time.to_rfc3339());
+            identity["last_collection_at"] = json!(saved_at);
+            if reject_changed(&mut stream) { return; }
+            let body = identity.to_string();
+            respond_private(&mut stream, "200 OK", "application/json; charset=utf-8", body.as_bytes(), method == "HEAD");
             return;
         }
         if path=="/api/comments/archive.json" {
@@ -1037,7 +1047,7 @@ mod message_api_tests {
         assert_eq!(value, json!({
             "logged_in": true, "mode": "online", "library_id": "",
             "uid": "18446744073709551614", "name": "测试用户",
-            "avatar_url": "https://i0.hdslb.com/face.jpg", "avatar_fallback_url": ""
+            "avatar_url": "https://i0.hdslb.com/face.jpg", "avatar_fallback_url": "", "last_collection_at": null
         }));
         assert!(request(port,"/api/account","https://example.org","GET").starts_with("HTTP/1.1 403"));
         assert!(request(port,"/api/account","","HEAD").ends_with("\r\n\r\n"));

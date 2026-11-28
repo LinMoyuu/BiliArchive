@@ -7,7 +7,6 @@ pub enum Action {
     Attachments(u64),
     Collect(u64, messages::Options),
     RetryNg(u64),
-    Export(u64, PathBuf),
 }
 // Login identity is authoritative before the asynchronous header profile is published.
 // Checking AppWindow.account-uid here would discard startup state while that label is empty.
@@ -161,8 +160,7 @@ pub fn run(action: Action, shared: &Arc<Shared>, ui: &Weak<AppWindow>) {
         Action::Load(u)
         | Action::Attachments(u)
         | Action::Collect(u, _)
-        | Action::RetryNg(u)
-        | Action::Export(u, _) => *u,
+        | Action::RetryNg(u) => *u,
     };
     if uid == 0 || uid != shared.account_uid.load(Ordering::SeqCst) {
         log_foot(shared, ui, "请先登录当前账号");
@@ -448,11 +446,6 @@ pub fn run(action: Action, shared: &Arc<Shared>, ui: &Weak<AppWindow>) {
                     },
                 );
             }
-            Action::Export(_, path) => {
-                let _guard = LocalReadGuard::messages(shared, ui);
-                messages::export_bundle(&shared.messages.lock().unwrap(), &path)?;
-                log_foot(shared, ui, format!("消息与附件已导出：{}", path.display()));
-            }
         }
         Ok(())
     })();
@@ -609,25 +602,6 @@ pub fn install(
         });
     }
 
-    {
-        let shared = shared.clone();
-        let tx = tx.clone();
-        ui.on_message_export(move || {
-            if shared.busy.load(Ordering::SeqCst) {
-                return;
-            }
-            if let Some(path) = rfd::FileDialog::new()
-                .add_filter("消息 JSON", &["json"])
-                .set_file_name("messages.json")
-                .save_file()
-            {
-                let _ = tx.send(Cmd::Messages(Action::Export(
-                    shared.account_uid.load(Ordering::SeqCst),
-                    path,
-                )));
-            }
-        });
-    }
     {
         let shared = shared.clone();
         let weak = weak.clone();

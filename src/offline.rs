@@ -582,6 +582,7 @@ fn import(paths: Vec<PathBuf>, shared: &Arc<Shared>, ui: &Weak<AppWindow>) -> Re
     set_foot(ui, "导入资料包：正在校验并合并归档…".into());
     let mut accounts = BTreeMap::new();
     let mut reports = Vec::new();
+    let mut collection_times = Vec::new();
     let mut my_comments = Vec::new();
     let mut count = 0;
     let mut resource_copies = archive::ResourceCopies::default();
@@ -624,6 +625,14 @@ fn import(paths: Vec<PathBuf>, shared: &Arc<Shared>, ui: &Weak<AppWindow>) -> Re
                 }
                 reports.push((uid, path.clone()));
                 continue;
+            }
+            if let Some(root) = &staged_archive {
+                if path.file_name().is_some_and(|name| name == crate::collection_time::FILE_NAME) {
+                    let stamp = crate::collection_time::Stamp::parse(parsed)?;
+                    anyhow::ensure!(path == &crate::collection_time::path(root, stamp.uid), "资料包采集时间与账号不匹配");
+                    collection_times.push(stamp);
+                    continue;
+                }
             }
             if parsed["format"].as_str().is_some_and(crate::my_comments::Detail::recognizes_format) {
                 let detail: crate::my_comments::Detail = serde_json::from_value(parsed)?;
@@ -801,6 +810,10 @@ fn import(paths: Vec<PathBuf>, shared: &Arc<Shared>, ui: &Weak<AppWindow>) -> Re
             crate::my_comments::write(&root, &detail)?;
         }
         count += 1;
+    }
+    for stamp in collection_times {
+        anyhow::ensure!(accounts.contains_key(&stamp.uid), "采集时间与导入账号不匹配");
+        stamp.merge(&archive_target)?;
     }
     let first = accounts.values().next().context("资料包没有账号")?;
     let mut first_messages = None;
@@ -1021,6 +1034,7 @@ fn account_bundle_files(account_root: &Path) -> Result<Vec<PathBuf>> {
     scan_files(account_root, |path| {
         path.starts_with(&comments)
             || path.starts_with(&messages)
+            || path == account_root.join(crate::collection_time::FILE_NAME)
             || path == reports
             || path.parent() == Some(reports.as_path())
     })
@@ -1050,7 +1064,10 @@ fn export_bundle(dest: &Path, shared: &Arc<Shared>) -> Result<()> {
             continue;
         }
         let bytes = std::fs::read(&file)?;
-        if file.starts_with(&report_dir) {
+        if file == crate::collection_time::path(&archive_root, uid) {
+            let stamp = crate::collection_time::Stamp::parse(serde_json::from_slice(&bytes)?)?;
+            anyhow::ensure!(stamp.uid == uid, "导出的采集时间与账号不匹配");
+        } else if file.starts_with(&report_dir) {
             if file.parent() != Some(report_dir.as_path()) {
                 continue;
             }
@@ -1273,7 +1290,8 @@ mod tests {
         let likes = root.join("messages/likes.json");
         let comments = root.join("comments/12/videos/1.json");
         let report = root.join("reports/run.json");
-        for path in [&likes, &comments, &report] {
+        let stamp = root.join(crate::collection_time::FILE_NAME);
+        for path in [&likes, &comments, &report, &stamp] {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, b"{}").unwrap();
         }
@@ -1281,7 +1299,7 @@ mod tests {
         std::fs::write(&report, data.to_string()).unwrap();
         assert_eq!(
             account_bundle_files(root).unwrap(),
-            vec![comments, likes, report.clone()]
+            vec![stamp, comments, likes, report.clone()]
         );
         assert_eq!(collection_report_uid(&data).unwrap(), 12);
         let restored = root.join("restored");

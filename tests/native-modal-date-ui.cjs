@@ -34,7 +34,24 @@ assert(yearBox.includes('min(CalendarLimits.last-year, max(CalendarLimits.first-
 assert(date.includes('root.calendar-year > CalendarLimits.first-year || root.calendar-month > 1'));
 assert(date.includes('root.calendar-year < CalendarLimits.last-year || root.calendar-month < 12'));
 assert(ui.includes('text: "留空不限 · 结束日期包含当天"'));
+const collection=body('message-controls := VerticalLayout');
+assert.deepEqual([...collection.matchAll(/checked <=> root\.message-(replies|mentions|likes|private|groups)\b/g)].map(m=>m[1]),
+ ['replies','mentions','likes','private','groups']);
+assert(body('groups-modal := PopupWindow').includes('粉丝团历史消息不会过期，消息量可能较大，采集耗时较长。是否继续启用？'));
 const settings=body('settings-body := VerticalLayout');
+assert(settings.includes('number-width: 68px'));
+assert(settings.includes('number-height: 32px'));
+assert.equal((settings.match(/width: settings-body\.number-width;/g)||[]).length,4);
+assert.equal((settings.match(/height: settings-body\.number-height;/g)||[]).length,4);
+for(const input of ['port-in','delay-in','delay-max-in','workers-in']){
+ const number=body(input+' := TextInput');
+ assert(number.includes('input-type: number'));
+ assert(number.includes('parent.width - 2 * settings-body.number-padding'));
+}
+const focus=body('settings-modal-focus := FocusScope');
+assert(focus.includes('if workers-in.has-focus { self.focus(); }'));
+assert(body('settings-scroll := HubScrollView').includes('scrollbar-pressed => { settings-modal-focus.release-workers-focus(); }'));
+assert.equal((focus.match(/clicked => \{ settings-modal-focus\.release-workers-focus\(\); \}/g)||[]).length,2);
 assert(body('settings-card := Rectangle').includes('width: 448px'));
 assert(settings.includes('control-width: 208px'));
 assert(settings.includes('column-gap: 8px'));

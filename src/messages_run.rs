@@ -88,6 +88,16 @@ impl<'a> CrawlContext<'a> {
         (self.emit)(CrawlEvent::Report(self.path.clone().unwrap()));
         Ok(())
     }
+    pub(super) fn record_collection(&mut self, store: &Arc<Mutex<Store>>, uid: u64, saved: bool) {
+        if !self.live || !saved {
+            return;
+        }
+        let archive_root = crate::archive::storage_root(&store.lock().unwrap().root);
+        if let Err(error) = crate::collection_time::record(&archive_root, uid) {
+            (self.emit)(CrawlEvent::Issue(format!("记录上次采集时间失败：{error:#}")));
+        }
+    }
+
     pub fn monitor(&mut self, store: &Arc<Mutex<Store>>) {
         self.store = Some(Arc::clone(store));
     }

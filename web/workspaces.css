@@ -92,7 +92,9 @@
 :is(#comment-workspace,#comment-header) .detail-cover{width:108px; height:68px; border-radius:9px; background:#eceff6 center/cover no-repeat; flex:none; overflow:hidden; display:grid; place-items:center; color:#c2c8d6; font-weight:700}
 :is(#comment-workspace,#comment-header) .detail-cover img{width:100%; height:100%; object-fit:cover}
 :is(#comment-workspace,#comment-header) .detail-main{min-width:0; flex:1}
-:is(#comment-workspace,#comment-header) .detail-main h1{margin:0 0 6px; font-size:16px; line-height:1.4; font-weight:700}
+:is(#comment-workspace,#comment-header) .detail-main h1{--detail-title-line:22.4px;display:flex;align-items:flex-start;gap:6px;margin:0 0 6px;font-size:16px;line-height:var(--detail-title-line);font-weight:700}
+#comment-workspace .detail-title{min-width:0;overflow-wrap:anywhere}
+#comment-workspace .detail-main h1 .badge{display:inline-flex;flex:none;align-items:center;height:var(--detail-title-line);padding-block:0;white-space:nowrap}
 :is(#comment-workspace,#comment-header) .detail-sub{display:flex; align-items:center; gap:10px; flex-wrap:wrap; font-size:11.5px; color:var(--faint)}
 :is(#comment-workspace,#comment-header) .detail-sub .kv b{color:var(--muted); font-weight:600}
 :is(#comment-workspace,#comment-header) .head-tools{display:flex; gap:8px; flex:none; align-items:flex-start}
@@ -457,8 +459,7 @@ body:has(#account-toggle[data-mode="offline"])>main{height:auto;min-height:0;fle
 .thumb .archive-image-placeholder,.cover .archive-image-placeholder,.reply-thumbnail .archive-image-placeholder{width:100%;height:100%}
 .web-account:has(#account-toggle[data-mode="offline"]){min-width:0;max-width:55%;flex-shrink:1}
 #account-toggle[data-mode="offline"] #account-name{min-width:0;max-width:none;white-space:normal;overflow:visible;overflow-wrap:anywhere;text-overflow:clip;text-align:left}
-#account-menu-name[hidden]{display:none}
-#account-menu-name{display:block;overflow-wrap:anywhere;margin-bottom:4px}
+#account-last-collection{display:block;margin-top:4px}
 #account-toggle .chevron{flex:none}
 @media(max-width:600px){
  .app-header:has(#account-toggle[data-mode="offline"]){flex-wrap:wrap}

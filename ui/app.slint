@@ -63,6 +63,7 @@ component HubScrollBar inherits Rectangle {
     private property <length> drag-origin;
     private property <length> drag-offset;
     private property <length> drag-maximum;
+    callback pointer-pressed();
     visible: maximum > 0px;
     background: transparent;
     Rectangle {
@@ -77,6 +78,7 @@ component HubScrollBar inherits Rectangle {
         mouse-cursor: pointer;
         pointer-event(event) => {
             if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                root.pointer-pressed();
                 root.drag-origin = root.horizontal ? self.mouse-x : self.mouse-y;
                 if root.drag-origin < root.position || root.drag-origin > root.position + root.thumb-size {
                     root.offset = -root.maximum * max(0px, min(root.travel, root.drag-origin - root.thumb-size / 2)) / max(1px, root.travel);
@@ -101,6 +103,7 @@ component HubScrollView inherits Rectangle {
     in-out property <length> content-y <=> view.content-y;
     out property <length> visible-width: view.visible-width;
     out property <length> visible-height: view.visible-height;
+    callback scrollbar-pressed();
     background: transparent;
     view := ScrollView {
         width: parent.width - 10px;
@@ -108,8 +111,8 @@ component HubScrollView inherits Rectangle {
         vertical-scrollbar-policy: always-off; horizontal-scrollbar-policy: always-off;
         @children
     }
-    HubScrollBar { x: parent.width - 10px; y: 6px; width: 10px; height: max(0px, view.height - 12px); extent: root.content-height; page: view.height; offset <=> root.content-y; }
-    HubScrollBar { x: 6px; y: parent.height - 10px; height: 10px; width: max(0px, view.width - 12px); horizontal: true; extent: root.content-width; page: view.width; offset <=> root.content-x; }
+    HubScrollBar { x: parent.width - 10px; y: 6px; width: 10px; height: max(0px, view.height - 12px); extent: root.content-height; page: view.height; offset <=> root.content-y; pointer-pressed => { root.scrollbar-pressed(); } }
+    HubScrollBar { x: 6px; y: parent.height - 10px; height: 10px; width: max(0px, view.width - 12px); horizontal: true; extent: root.content-width; page: view.width; offset <=> root.content-x; pointer-pressed => { root.scrollbar-pressed(); } }
 }
 
 
@@ -780,6 +783,8 @@ component StatCard inherits Rectangle {
     in property <string> label;
     in property <bool> accent: false;
     height: 54px;
+    min-width: 0px;
+    preferred-width: 0px;
     horizontal-stretch: 1;
     border-radius: 10px;
     background: root.accent ? Theme.accent-soft : #F8F9FC;
@@ -850,7 +855,6 @@ export component AppWindow inherits Window {
     in-out property <string> message-attachments-status: "附件 0 已保存 / 0 待处理";
     callback message-load();
     callback message-start();
-    callback message-export();
     callback message-web();
 
     title: (root.workspace == 0 ? "稿件评论" : "消息归档") + " · BiliArchive";
@@ -970,7 +974,6 @@ export component AppWindow inherits Window {
     in-out property <int> stat-replies: 0;
     in-out property <string> stat-likes: "0";
     in-out property <string> log-text: "";
-    in-out property <bool> has-data: false;
     in-out property <string> foot-text: "就绪";
 
     callback read-archives(string);
@@ -981,7 +984,6 @@ export component AppWindow inherits Window {
     callback pause();
     callback stop();
     callback clear-resume();
-    callback export-clicked();
     callback open-dir();
     callback verify-dismiss();
     callback qr-login();
@@ -1387,14 +1389,6 @@ export component AppWindow inherits Window {
 
                             Rectangle { horizontal-stretch: 1; background: transparent; }
 
-                            // 导出（只有 JSON，不再提供格式选择）
-                            Btn {
-                                text: "导出 JSON";
-                                primary: true;
-                                width: 92px;
-                                enabled: !root.busy && root.has-data;
-                                clicked => { root.export-clicked(); }
-                            }
                         }
 
                         Rectangle { height: 1px; background: #F1F3F8; }
@@ -1448,6 +1442,21 @@ export component AppWindow inherits Window {
                         padding: 0px; spacing: 10px;
                         HorizontalLayout {
                             height: 28px; spacing: 10px;
+                            Toggle { checked <=> root.message-replies; enabled: !root.busy; }
+                            Text { height: 28px; font-size: Theme.font-body; text: "回复我的"; color: Theme.text; vertical-alignment: center; }
+                        }
+                        HorizontalLayout {
+                            height: 28px; spacing: 10px;
+                            Toggle { checked <=> root.message-mentions; enabled: !root.busy; }
+                            Text { height: 28px; font-size: Theme.font-body; text: "@我的"; color: Theme.text; vertical-alignment: center; }
+                        }
+                        HorizontalLayout {
+                            height: 28px; spacing: 10px;
+                            Toggle { checked <=> root.message-likes; enabled: !root.busy; }
+                            Text { height: 28px; font-size: Theme.font-body; text: "收到的赞"; color: Theme.text; vertical-alignment: center; }
+                        }
+                        HorizontalLayout {
+                            height: 28px; spacing: 10px;
                             Toggle { checked <=> root.message-private; enabled: !root.busy; }
                             Text { height: 28px; font-size: Theme.font-body; text: "私信（含未关注人）"; color: Theme.text; vertical-alignment: center; }
                         }
@@ -1463,21 +1472,6 @@ export component AppWindow inherits Window {
                                 }
                             }
                             Text { height: 28px; font-size: Theme.font-body; text: "粉丝团"; color: Theme.text; vertical-alignment: center; }
-                        }
-                        HorizontalLayout {
-                            height: 28px; spacing: 10px;
-                            Toggle { checked <=> root.message-likes; enabled: !root.busy; }
-                            Text { height: 28px; font-size: Theme.font-body; text: "收到的赞"; color: Theme.text; vertical-alignment: center; }
-                        }
-                        HorizontalLayout {
-                            height: 28px; spacing: 10px;
-                            Toggle { checked <=> root.message-replies; enabled: !root.busy; }
-                            Text { height: 28px; font-size: Theme.font-body; text: "回复我的"; color: Theme.text; vertical-alignment: center; }
-                        }
-                        HorizontalLayout {
-                            height: 28px; spacing: 10px;
-                            Toggle { checked <=> root.message-mentions; enabled: !root.busy; }
-                            Text { height: 28px; font-size: Theme.font-body; text: "@我的"; color: Theme.text; vertical-alignment: center; }
                         }
                         HorizontalLayout {
                             spacing: 8px;
@@ -1537,7 +1531,6 @@ export component AppWindow inherits Window {
 
                             Btn { text: "重试NG项[" + root.message-ng-count + "]"; width: 110px; enabled: !root.busy && root.account-logged-in && root.message-ng-count > 0; clicked => {root.message-retry-ng();} }
                             Btn { text: "处理附件"; width: 78px; enabled: !root.busy && root.message-attachments-pending > 0; clicked => {root.message-attachments();} }
-                            Btn { text: "导出 JSON"; width: 92px; primary: true; enabled: !root.busy; clicked => {root.message-export();} }
                         }
                         Rectangle { height: 1px; background: #F1F3F8; }
 
@@ -1598,6 +1591,9 @@ export component AppWindow inherits Window {
         x: 0px; y: 0px; width: root.width; height: root.height;
         close-policy: no-auto-close; forward-focus: settings-modal-focus;
         settings-modal-focus := FocusScope {
+            function release-workers-focus() {
+                if workers-in.has-focus { self.focus(); }
+            }
             width: parent.width; height: parent.height;
             key-pressed(event) => {
                 if event.text == Key.Tab { return reject; }
@@ -1637,7 +1633,11 @@ export component AppWindow inherits Window {
                     drop-shadow-blur: 34px;
                     drop-shadow-color: #0F172A38;
 
-                    TouchArea { width: parent.width; height: parent.height; scroll-event(event) => { return accept; } }
+                    TouchArea {
+                        width: parent.width; height: parent.height;
+                        clicked => { settings-modal-focus.release-workers-focus(); }
+                        scroll-event(event) => { return accept; }
+                    }
 
                     VerticalLayout {
                         padding: 20px;
@@ -1670,11 +1670,19 @@ export component AppWindow inherits Window {
                             settings-scroll := HubScrollView {
                                 width: parent.width; height: parent.height; content-width: self.visible-width;
                                 content-height: max(settings-body.preferred-height, self.visible-height);
+                                scrollbar-pressed => { settings-modal-focus.release-workers-focus(); }
+                                TouchArea {
+                                    x: 0px; y: 0px; width: settings-scroll.visible-width; height: settings-scroll.content-height;
+                                    clicked => { settings-modal-focus.release-workers-focus(); }
+                                }
                                 settings-body := VerticalLayout {
                                     width: settings-scroll.visible-width - 12px; height: self.preferred-height;
                                     spacing: 13px;
                                     property <length> control-width: 208px;
                                     property <length> column-gap: 8px;
+                                    property <length> number-width: 68px;
+                                    property <length> number-height: 32px;
+                                    property <length> number-padding: 9px;
                                     // ---- 网页端口 ----
                                     VerticalLayout {
                                         spacing: 5px;
@@ -1685,17 +1693,17 @@ export component AppWindow inherits Window {
                                                 width: settings-body.control-width;
                                                 spacing: 6px;
                                                 Rectangle {
-                                                    width: 76px;
-                                                    height: 32px;
+                                                    width: settings-body.number-width;
+                                                    height: settings-body.number-height;
                                                     border-radius: 9px;
                                                     background: Theme.field;
                                                     border-width: 1px;
                                                     border-color: port-in.has-focus ? #F7C3D3 : Theme.border;
 
                                                     port-in := TextInput {
-                                                        x: 9px;
+                                                        x: settings-body.number-padding;
                                                         y: 0;
-                                                        width: parent.width - 18px;
+                                                        width: parent.width - 2 * settings-body.number-padding;
                                                         height: parent.height;
                                                         text <=> root.web-port-text;
                                                         input-type: number;
@@ -1708,13 +1716,13 @@ export component AppWindow inherits Window {
                                                 Btn {
                                                     text: "打开网页";
                                                     width: 66px;
-                                                    clicked => { root.settings-open-web(); }
+                                                    clicked => { settings-modal-focus.release-workers-focus(); root.settings-open-web(); }
                                                 }
                                                 Btn {
                                                     text: root.web-running ? "停止" : "启动";
                                                     width: 54px;
                                                     primary: root.web-running;
-                                                    clicked => { root.settings-toggle-web(); }
+                                                    clicked => { settings-modal-focus.release-workers-focus(); root.settings-toggle-web(); }
                                                 }
                                             }
                                             VerticalLayout {
@@ -1746,7 +1754,7 @@ export component AppWindow inherits Window {
                                                             return reject;
                                                         }
                                                     }
-                                                    web-address-hit := TouchArea { mouse-cursor: pointer; clicked => { root.settings-open-web(); } }
+                                                    web-address-hit := TouchArea { mouse-cursor: pointer; clicked => { settings-modal-focus.release-workers-focus(); root.settings-open-web(); } }
                                                 }
                                             }
                                         }
@@ -1763,17 +1771,17 @@ export component AppWindow inherits Window {
                                                 alignment: LayoutAlignment.start;
                                                 spacing: 6px;
                                                 Rectangle {
-                                                    width: 68px;
-                                                    height: 32px;
+                                                    width: settings-body.number-width;
+                                                    height: settings-body.number-height;
                                                     border-radius: 9px;
                                                     background: Theme.field;
                                                     border-width: 1px;
                                                     border-color: delay-in.has-focus ? #F7C3D3 : Theme.border;
 
                                                     delay-in := TextInput {
-                                                        x: 9px;
+                                                        x: settings-body.number-padding;
                                                         y: 0;
-                                                        width: parent.width - 18px;
+                                                        width: parent.width - 2 * settings-body.number-padding;
                                                         height: parent.height;
                                                         text <=> root.page-delay-text;
                                                         input-type: number;
@@ -1786,17 +1794,17 @@ export component AppWindow inherits Window {
                                                 Text { text: "ms"; color: Theme.faint; font-size: Theme.font-hint; vertical-alignment: center; }
                                                 Text { text: "~"; color: Theme.faint; font-size: Theme.font-body; vertical-alignment: center; }
                                                 Rectangle {
-                                                    width: 68px;
-                                                    height: 32px;
+                                                    width: settings-body.number-width;
+                                                    height: settings-body.number-height;
                                                     border-radius: 9px;
                                                     background: Theme.field;
                                                     border-width: 1px;
-                                                    border-color: delay-max-in.has-focus ? #FBC3D3 : #E6E9F1;
+                                                    border-color: delay-max-in.has-focus ? #F7C3D3 : Theme.border;
 
                                                     delay-max-in := TextInput {
-                                                        x: 9px;
+                                                        x: settings-body.number-padding;
                                                         y: 0;
-                                                        width: parent.width - 18px;
+                                                        width: parent.width - 2 * settings-body.number-padding;
                                                         height: parent.height;
                                                         text <=> root.page-delay-max-text;
                                                         input-type: number;
@@ -1860,8 +1868,8 @@ export component AppWindow inherits Window {
                                                     }
                                                 }
                                             }
-                                            Btn { text: "选择"; width: 56px; clicked => { root.settings-pick-dir(); } }
-                                            Btn { text: "打开"; width: 56px; clicked => { root.settings-open-dir(); } }
+                                            Btn { text: "选择"; width: 56px; clicked => { settings-modal-focus.release-workers-focus(); root.settings-pick-dir(); } }
+                                            Btn { text: "打开"; width: 56px; clicked => { settings-modal-focus.release-workers-focus(); root.settings-open-dir(); } }
                                         }
                                     }
 
@@ -1876,7 +1884,7 @@ export component AppWindow inherits Window {
                                                 alignment: LayoutAlignment.start;
                                                 spacing: 8px;
                                                 Text { text: "归档预缓存"; color: Theme.text; font-size: Theme.font-section; font-weight: 600; vertical-alignment: center; }
-                                                Toggle { checked <=> root.archive-precache; enabled: !root.busy; }
+                                                Toggle { checked <=> root.archive-precache; enabled: !root.busy; toggled => { settings-modal-focus.release-workers-focus(); } }
                                             }
                                             Text { text: "开启后预读归档，关闭后按需从磁盘读取，可减少内存占用。"; color: Theme.faint; font-size: Theme.font-hint; wrap: word-wrap; vertical-alignment: center; horizontal-stretch: 1; }
                                         }
@@ -1888,19 +1896,19 @@ export component AppWindow inherits Window {
                                                 spacing: 10px;
                                                 Text { text: "本地归档线程数"; color: Theme.text; font-size: Theme.font-section; font-weight: 600; vertical-alignment: center; }
                                                 Rectangle {
-                                                    width: 68px;
-                                                    height: 32px;
+                                                    width: settings-body.number-width;
+                                                    height: settings-body.number-height;
                                                     border-radius: 9px;
                                                     background: Theme.field;
                                                     border-width: 1px;
                                                     border-color: workers-in.has-focus ? #F7C3D3 : Theme.border;
                                                     Text {
-                                                        x: 9px; width: parent.width - 18px; height: parent.height;
+                                                        x: settings-body.number-padding; width: parent.width - 2 * settings-body.number-padding; height: parent.height;
                                                         text: "自动"; visible: root.archive-workers-text == "" && !workers-in.has-focus;
                                                         color: Theme.faint; font-size: Theme.font-body; vertical-alignment: center;
                                                     }
                                                     workers-in := TextInput {
-                                                        x: 9px; width: parent.width - 18px; height: parent.height;
+                                                        x: settings-body.number-padding; width: parent.width - 2 * settings-body.number-padding; height: parent.height;
                                                         text <=> root.archive-workers-text;
                                                         input-type: number; single-line: true;
                                                         color: Theme.text; font-size: Theme.font-body; vertical-alignment: center;
@@ -1915,11 +1923,11 @@ export component AppWindow inherits Window {
                                     Text { text: "私信图片始终保存；其他消息附件同样始终启用（包含已采集粉丝团）。\n头像、封面和评论配图默认只保留链接"; color: Theme.faint; font-size: Theme.font-hint; wrap: word-wrap; }
                                     offline-resources := VerticalLayout {
                                         spacing: 4px;
-                                        HorizontalLayout { height: 26px; spacing: 12px; Text { text: "用户头像"; color: Theme.text; font-size: Theme.font-body; vertical-alignment: center; horizontal-stretch: 1; } Toggle { checked <=> root.resource-avatars; enabled: !root.busy; } }
-                                        HorizontalLayout { height: 26px; spacing: 12px; Text { text: "稿件 / 主题封面"; color: Theme.text; font-size: Theme.font-body; vertical-alignment: center; horizontal-stretch: 1; } Toggle { checked <=> root.resource-covers; enabled: !root.busy; } }
-                                        HorizontalLayout { height: 26px; spacing: 12px; Text { text: "评论 / 动态配图"; color: Theme.text; font-size: Theme.font-body; vertical-alignment: center; horizontal-stretch: 1; } Toggle { checked <=> root.resource-content-images; enabled: !root.busy; } }
+                                        HorizontalLayout { height: 26px; spacing: 12px; Text { text: "用户头像"; color: Theme.text; font-size: Theme.font-body; vertical-alignment: center; horizontal-stretch: 1; } Toggle { checked <=> root.resource-avatars; enabled: !root.busy; toggled => { settings-modal-focus.release-workers-focus(); } } }
+                                        HorizontalLayout { height: 26px; spacing: 12px; Text { text: "稿件 / 主题封面"; color: Theme.text; font-size: Theme.font-body; vertical-alignment: center; horizontal-stretch: 1; } Toggle { checked <=> root.resource-covers; enabled: !root.busy; toggled => { settings-modal-focus.release-workers-focus(); } } }
+                                        HorizontalLayout { height: 26px; spacing: 12px; Text { text: "评论 / 动态配图"; color: Theme.text; font-size: Theme.font-body; vertical-alignment: center; horizontal-stretch: 1; } Toggle { checked <=> root.resource-content-images; enabled: !root.busy; toggled => { settings-modal-focus.release-workers-focus(); } } }
                                     }
-                                    Btn { text: "处理资源（使用已保存设置）"; enabled: !root.busy; clicked => { root.process-resources(); } }
+                                    Btn { text: "处理资源（使用已保存设置）"; enabled: !root.busy; clicked => { settings-modal-focus.release-workers-focus(); root.process-resources(); } }
                                 }
                             }
                         }
@@ -1931,7 +1939,7 @@ export component AppWindow inherits Window {
                                 width: 84px;
                                 primary: true;
                                 small: true;
-                                clicked => { root.settings-apply(); }
+                                clicked => { settings-modal-focus.release-workers-focus(); root.settings-apply(); }
                             }
                         }
                     }
@@ -2132,7 +2140,7 @@ export component AppWindow inherits Window {
                             Text { text: "采集粉丝团"; color: Theme.text; font-size: Theme.font-title; font-weight: 700; horizontal-stretch: 1; vertical-alignment: center; }
                             Btn { text: "×"; width: 32px; small: true; clicked => { root.message-groups-confirm = false; } }
                         }
-                        Text { text: "粉丝团消息量可能较大，采集可能需要很久。是否继续勾选？"; color: Theme.muted; font-size: Theme.font-body; wrap: word-wrap; vertical-stretch: 1; }
+                        Text { text: "粉丝团历史消息不会过期，消息量可能较大，采集耗时较长。是否继续启用？"; color: Theme.muted; font-size: Theme.font-body; wrap: word-wrap; vertical-stretch: 1; }
                         HorizontalLayout {
                             alignment: LayoutAlignment.end;
                             Btn { text: "取消"; width: 76px; small: true; clicked => { root.message-groups-confirm = false; } }

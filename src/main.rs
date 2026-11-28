@@ -5,6 +5,7 @@ mod library;
 mod local_read;
 mod offline;
 mod my_comments;
+mod collection_time;
 mod portable_zip;
 mod archive;
 mod bili;
@@ -260,7 +261,6 @@ struct Shared {
     public_account: Arc<Mutex<account_ui::PublicAccount>>,
     checkpoint: Mutex<Option<checkpoint::Task>>,
     log: Mutex<String>,
-    last_export: Mutex<Option<PathBuf>>,
 }
 
 impl Shared {
@@ -284,7 +284,6 @@ impl Shared {
             account_uid: std::sync::atomic::AtomicU64::new(0),
             checkpoint: Mutex::new(None),
             log: Mutex::new(String::new()),
-            last_export: Mutex::new(None),
         }
     }
 }
@@ -341,7 +340,6 @@ enum Cmd {
     CrawlUp,
     QueryTotals { types: Vec<u32>, uid: u64, cookie: String, batch: u64 },
     ProcessResources,
-    Export { path: PathBuf },
 }
 
 // ---------------- 小工具 ----------------
@@ -593,7 +591,6 @@ fn refresh_rows(shared: &Arc<Shared>, ui: &Weak<AppWindow>) {
 fn refresh_stats(shared: &Arc<Shared>, ui: &Weak<AppWindow>) {
     let doc = shared.doc.lock().unwrap();
     let stats = doc.stats.clone();
-    let has = stats.comments > 0;
     drop(doc);
     emit(ui, move |w| {
         w.set_stat_videos(stats.videos as i32);
@@ -601,7 +598,6 @@ fn refresh_stats(shared: &Arc<Shared>, ui: &Weak<AppWindow>) {
         w.set_stat_comments(stats.comments as i32);
         w.set_stat_replies(stats.replies as i32);
         w.set_stat_likes(human_count(stats.likes).into());
-        w.set_has_data(has);
     });
 }
 
@@ -748,6 +744,13 @@ impl std::error::Error for CommentArchiveFailure {}
 fn persist_comment_progress(root:&std::path::Path,task:&checkpoint::Task,videos:&[Video])->Result<usize> {
     export::persist_comments(root,task.uid,videos,||task.save()).context(CommentArchiveFailure)
 }
+fn record_comment_collection(root: &std::path::Path, uid: u64, saved: bool, shared: &Arc<Shared>, ui: &Weak<AppWindow>) {
+    if saved {
+        if let Err(error) = collection_time::record(&archive::root(root), uid) {
+            push_log(shared, ui, format!("记录上次采集时间失败：{error:#}"));
+        }
+    }
+}
 fn comment_archive_failure(shared:&Arc<Shared>,ui:&Weak<AppWindow>,task:&checkpoint::Task,error:impl std::fmt::Display) {
     active_task(shared,ui,task);
     let text=format!("评论自动归档失败，断点已保留：{}",error);
@@ -846,7 +849,7 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
         let task_type=match &cmd {Cmd::Start|Cmd::CrawlUp=>1,Cmd::ProcessResources=>3,_=>0};
         let _task=TaskGuard::begin(&shared,&ui,task_type);
         let on_demand = !shared.cfg.lock().unwrap().archive_precache;
-        if matches!(&cmd, Cmd::Start | Cmd::CrawlUp | Cmd::ProcessResources | Cmd::Export { .. }) {
+        if matches!(&cmd, Cmd::Start | Cmd::CrawlUp | Cmd::ProcessResources) {
             let compact = {
                 let doc = shared.doc.lock().unwrap();
                 doc.stats.comments > 0 && doc.videos.iter().all(|v| v.comments.is_empty())
@@ -1168,6 +1171,7 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                             let mut next=task.clone();
                             next.targets[index]=v.clone();next.cursors.insert(key.clone(),cursor.clone());
                             persist_comment_progress(&output_root,&next,std::slice::from_ref(v))?;
+                            record_comment_collection(&output_root, uid, !v.comments.is_empty(), &shared, &ui);
                             task=next;
                             active_task(&shared, &ui, &task);
                             {
@@ -1191,6 +1195,7 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                                 failure = Some(error);
                                 break;
                             }
+                            record_comment_collection(&output_root, uid, !video.comments.is_empty(), &shared, &ui);
                             task=next;
                             log_foot(&shared, &ui, format!("已保存稿件 {}/{} · {}",
                                 task.done.len(), task.targets.len(), video.display_title()));
@@ -1342,6 +1347,7 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                                     aborted = true;
                                     break;
                                 }
+                                record_comment_collection(&output_root, self_mid, !partial.is_empty(), &shared, &ui);
                                 task=next;active_task(&shared,&ui,&task);
                                 log_foot(&shared, &ui, format!("已保存{label}第 {page} 页 · {rows_on_page} 条评论"));
                                 {
@@ -1578,29 +1584,7 @@ fn worker(rx: Receiver<Cmd>, shared: Arc<Shared>, ui: Weak<AppWindow>) {
                 process_comment_resources(&shared, &ui, &exported,&output_root);
             }
 
-            Cmd::Export { path } => {
-                let content = {
-                    let doc = shared.doc.lock().unwrap();
-                    export::to_json(&doc)
-                };
-                match content.and_then(|c| export::write_file(&path, &c)) {
-                    Ok(_) => {
-                        let name = path
-                            .file_name()
-                            .map(|s| s.to_string_lossy().to_string())
-                            .unwrap_or_default();
-                        push_log(&shared, &ui, format!("已导出：{}", path.display()));
-                        set_foot(&ui, format!("已导出 {}", name));
-                        set_status(&ui, "已导出".into(), true);
-                        *shared.last_export.lock().unwrap() = Some(path.clone());
 
-                    }
-                    Err(e) => {
-                        push_log(&shared, &ui, format!("导出失败：{}", e));
-                        set_foot(&ui, "导出失败".into());
-                    }
-                }
-            }
         }
     }
 }
@@ -2400,30 +2384,6 @@ fn main() -> Result<(), slint::PlatformError> {
             }
             clear_checkpoint(&shared, &weak);
             log_foot(&shared, &weak, "已清除断点，下次将从头开始采集");
-        });
-    }
-
-    // ---- 导出 ----
-    {
-        let tx = tx.clone();
-        let shared = shared.clone();
-        let weak = weak.clone();
-        ui.on_export_clicked(move || {
-            let dir=export_dir_of(&shared.cfg.lock().unwrap());
-            let mut dialog = rfd::FileDialog::new()
-                .set_title("导出评论数据（JSON）")
-                .set_file_name(default_export_name());
-            if !dir.is_empty() {
-                dialog = dialog.set_directory(&dir);
-            }
-            let picked = dialog.add_filter("JSON 文档", &["json"]).save_file();
-            if let Some(mut path) = picked {
-                if path.extension().is_none() {
-                    path.set_extension("json");
-                }
-                let _ = tx.send(Cmd::Export { path });
-            }
-            let _ = &weak;
         });
     }
 
@@ -3592,6 +3552,7 @@ fn merge_online_metadata(shared: &Arc<Shared>, video: &Video) {
         .iter_mut()
         .find(|v| checkpoint::key(v) == checkpoint::key(video))
     {
+        let was_hidden = old.is_hidden();
         for (dst, src) in [
             (&mut old.title, &video.title),
             (&mut old.bvid, &video.bvid),
@@ -3615,13 +3576,50 @@ fn merge_online_metadata(shared: &Arc<Shared>, video: &Video) {
             old.status_text = video.status_text.clone();
         }
         old.comment_total = video.comment_total;
+        // Online metadata can change visibility. Comment totals in a disk projection
+        // are already populated even when its videos have no comment bodies.
+        match (was_hidden, old.is_hidden()) {
+            (false, true) => doc.stats.deleted_videos += 1,
+            (true, false) => doc.stats.deleted_videos = doc.stats.deleted_videos.saturating_sub(1),
+            _ => {}
+        }
     }
-    doc.recount();
 }
 
 #[cfg(test)]
 mod historical_data_tests {
     use super::*;
+    #[test]
+    fn refreshing_online_metadata_keeps_disk_projection_comment_totals() {
+        let root = tempfile::tempdir().unwrap();
+        let video = Video {
+            aid: 1,
+            owner_mid: 123,
+            comments: vec![model::Comment {
+                rpid: 10,
+                like: 12,
+                replies: vec![model::Reply {
+                    rpid: 11,
+                    like: 3,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        export::export_item_for(root.path(), &video, 123).unwrap();
+        let shared = Arc::new(Shared::new(Cfg::default()));
+        *shared.doc.lock().unwrap() = preview_disk::desktop_projection(root.path(), 123);
+        let mut online = video.without_comments();
+        online.status = "deleted".into();
+        merge_online_metadata(&shared, &online);
+        merge_online_metadata(&shared, &online);
+        let doc = shared.doc.lock().unwrap();
+        assert!(doc.videos[0].comments.is_empty());
+        assert_eq!((doc.stats.comments, doc.stats.replies, doc.stats.likes), (1, 1, 15));
+        assert_eq!(doc.stats.deleted_videos, 1);
+    }
+
     #[test]
     fn online_metadata_preserves_comments_without_a_required_online_result() {
         let shared = Arc::new(Shared::new(Cfg::default()));

@@ -468,7 +468,7 @@ async function selectVideo(key, opts){
   $('detail').innerHTML = `
     <div class="detail-cover">${cover}</div>
     <div class="detail-main">
-      <h1>${esc(title)} ${typeBadge} ${badge}</h1>
+      <h1><span class="detail-title">${esc(title)}</span>${typeBadge}${badge}</h1>
       <div class="detail-sub">${sub.join('')}</div>
       ${body}
     </div>

@@ -1,6 +1,7 @@
 'use strict';
 (() => {
  const button=document.getElementById('account-toggle'),menu=document.getElementById('account-menu');
+ const collection=document.getElementById('account-last-collection');
  const avatar=document.getElementById('account-avatar'),fallback=document.getElementById('account-fallback');
  document.getElementById('account-default-avatar').onerror=function(){this.hidden=true;};
  let lastUid,lastScope,avatarUrl='',request=0;
@@ -49,16 +50,18 @@
    if(uid!==lastUid||scopeChanged){close();if(lastUid!==undefined)window.dispatchEvent(new CustomEvent('accountchange',{detail:{uid}}));lastUid=uid;}
    const name=selected?(data.name||uid)+(offline?' · 本地':''):'未登录';
    document.getElementById('account-name').textContent=name;
-   const menuName=document.getElementById('account-menu-name');
-   menuName.textContent=name;menuName.hidden=!selected;
    button.setAttribute('data-mode',offline?'offline':'online');
-   document.getElementById('account-uid').textContent=selected?'UID '+uid+(offline?' · 本地资料':''):'请在桌面应用右上角登录';
+   document.getElementById('account-uid').textContent=selected?'UID '+uid:'请在桌面应用右上角登录';
+   const time=new Date(data.last_collection_at||'');
+   const label=Number.isFinite(time.getTime())?time.toLocaleString('zh-CN',{hour12:false}):'未记录';
+   collection.hidden=!selected;
+   collection.textContent=selected?'上次采集：'+label:'';
    button.title=selected?name+' · UID '+uid:'请在桌面应用右上角登录';
    showAvatar(selected?data.avatar_url:'',offline?data.avatar_fallback_url:'',scope);
   }catch{ /* Keep the last verified account through transient network errors. */ }
  }
- button.onclick=()=>{menu.hidden=!menu.hidden;button.setAttribute('aria-expanded',String(!menu.hidden));if(!menu.hidden)menu.focus();};
- button.onkeydown=e=>{if(e.key==='ArrowDown'){e.preventDefault();menu.hidden=false;button.setAttribute('aria-expanded','true');menu.focus();}};
+ button.onclick=()=>{menu.hidden=!menu.hidden;button.setAttribute('aria-expanded',String(!menu.hidden));if(!menu.hidden){menu.focus();refresh();}};
+ button.onkeydown=e=>{if(e.key==='ArrowDown'){e.preventDefault();menu.hidden=false;button.setAttribute('aria-expanded','true');menu.focus();refresh();}};
  menu.onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();close();button.focus();}else if(e.key==='Tab')close();};
  document.addEventListener('click',e=>{if(!button.contains(e.target)&&!menu.contains(e.target))close();});
  window.addEventListener('focus',refresh);

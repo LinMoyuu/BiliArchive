@@ -575,22 +575,6 @@ pub fn save_groups(store: &Store, groups: &BTreeSet<String>) -> Result<()> {
     Ok(())
 }
 
-pub fn export_bundle(store: &Store, path: &Path) -> Result<()> {
-    if path.starts_with(store.root.join("private")) || path.parent() == Some(store.root.as_path()) {
-        bail!("请将合并导出保存到归档目录之外，避免覆盖分类文件")
-    }
-    let root = crate::archive::storage_root(&store.root);
-    let mut archive =
-        crate::archive::from_messages(&store.doc, &root, crate::archive::ResourcePolicy::load());
-    crate::archive::copy_resources(
-        &mut archive,
-        &root,
-        path.parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .unwrap_or(Path::new(".")),
-    )?;
-    crate::archive::write(path, &archive)
-}
 
 #[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize, Debug)]
 pub struct Options {
@@ -1439,12 +1423,14 @@ fn crawl_pass(
                 let my_comments = items.iter()
                     .filter(|item| !ctx.my_comment_attempted.contains(&item.my_comment_rpid))
                     .filter_map(crate::my_comments::target).collect::<Vec<_>>();
+                let saved = !items.is_empty();
                 merge_page(store, uid, vec![], items)?;
                 task.pending_my_comments |= !my_comments.is_empty();
                 if !body["cursor"].is_object()
                     || !(body["cursor"]["is_end"].is_boolean() || body["cursor"]["is_end"].is_u64())
                 {
                     checkpoint_store(store, task, ty)?;
+                    ctx.record_collection(store, uid, saved);
                     ctx.paging_failed(
                         "通知缺少有效分页信息".into(),
                         json!({"reason":"invalid_paging"}),
@@ -1463,6 +1449,7 @@ fn crawl_pass(
                         || seen.contains(&(next_id.clone(), next_time)))
                 {
                     save(&store.lock().unwrap()).context(PersistFailure)?;
+                    ctx.record_collection(store, uid, saved);
                     ctx.paging_failed("分页未前进，已保留消息与断点".into(),json!({"reason":"non_advancing_cursor","cursor_id":cursor.id,"cursor_time":cursor.time}))?;
                     break;
                 }
@@ -1474,6 +1461,7 @@ fn crawl_pass(
                 };
                 task.feeds.insert(ty.clone(), cursor.clone());
                 checkpoint_store(store, task, ty)?;
+                ctx.record_collection(store, uid, saved);
                 ctx.paging_accepted()?;
                 ctx.recovered()?;
                 collect_my_comment_batch(store, task, &my_comments, cancel, request, ctx)?;
@@ -1691,9 +1679,11 @@ fn crawl_pass(
                             items.push(i)
                         }
                     }
+                    let saved = !items.is_empty();
                     merge_page(store, uid, vec![st.session.clone()], items)?;
                     if !(d["has_more"].is_boolean() || d["has_more"].is_u64()) {
                         checkpoint_store(store, task, "all")?;
+                        ctx.record_collection(store, uid, saved);
                         ctx.paging_failed(
                             "缺少有效 has_more 分页信息".into(),
                             json!({"reason":"invalid_paging"}),
@@ -1719,6 +1709,7 @@ fn crawl_pass(
                             || seen.contains(&next))
                     {
                         save(&store.lock().unwrap())?;
+                        ctx.record_collection(store, uid, saved);
                         ctx.paging_failed(
                             "消息序列号未前进，已保留断点".into(),
                             json!({"reason":"non_advancing_cursor","sequence":st.seq}),
@@ -1730,6 +1721,7 @@ fn crawl_pass(
                     st.done = end;
                     task.sessions.insert(key.clone(), st.clone());
                     checkpoint_store(store, task, &key)?;
+                    ctx.record_collection(store, uid, saved);
                     ctx.paging_accepted()?;
                     ctx.recovered()?;
                 }
